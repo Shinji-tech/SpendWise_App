@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useRef, useState, type FormEvent } from "react";
+import { useRef, useState, type SubmitEvent } from "react";
 import Alert from "@/components/Alert";
 import AuthCard from "@/components/AuthCard";
 import  Button  from "@/components/Button";
@@ -38,7 +38,7 @@ export default function SignUp() {
   };
   const blur = (k: Key) => () => setTouched((t) => ({ ...t, [k]: true }));
 
-  async function onSubmit(e: FormEvent) {
+  async function onSubmit(e: SubmitEvent<HTMLFormElement>) {
     e.preventDefault();
     if (loading) return;
     setSubmitted(true);
