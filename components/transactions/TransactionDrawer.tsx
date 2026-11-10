@@ -62,7 +62,8 @@ export default function TransactionDrawer({ mode, onClose, onToast }: Props) {
   const [date, setDate] = useState(existing?.date ?? toISODate(now));
   const [note, setNote] = useState(existing?.note ?? "");
   const [receipt, setReceipt] = useState<Receipt | undefined>(existing?.receipt);
-  const [errors, setErrors] = useState<Errors>({});
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);  const [errors, setErrors] = useState<Errors>({});
   const [receiptError, setReceiptError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -117,21 +118,93 @@ export default function TransactionDrawer({ mode, onClose, onToast }: Props) {
     clearError("category");
   }
 
-  function onFile(e: React.ChangeEvent<HTMLInputElement>) {
+  async function onFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     e.target.value = "";
     if (!file) return;
+
     const isPdf = file.type === "application/pdf" || /\.pdf$/i.test(file.name);
     const isImage = /^image\/(jpeg|png)$/.test(file.type) || /\.(jpe?g|png)$/i.test(file.name);
-    if (!isPdf && !isImage) return setReceiptError("Use a JPG, PNG or PDF file.");
-    if (file.size > MAX_RECEIPT_BYTES) return setReceiptError("That file is larger than 10 MB.");
+
+    if (!isPdf && !isImage) {
+      setReceiptError("Use a JPG, PNG or PDF file.");
+      return;
+    }
+
+    if (file.size > MAX_RECEIPT_BYTES) {
+      setReceiptError("That file is larger than 10 MB.");
+      return;
+    }
+
     setReceiptError(null);
-    setReceipt({ name: file.name, size: file.size, kind: isPdf ? "pdf" : "image" });
+    setUploading(true);
+    setReceipt({
+      name: file.name,
+      size: file.size,
+      kind: isPdf ? "pdf" : "image",
+      status: "uploading",
+    });
+
+    try {
+      const uploaded = await uploadReceipt(file);
+      setReceipt(uploaded);
+      setReceiptError(null);
+    } catch (error) {
+      setReceipt({
+        name: file.name,
+        size: file.size,
+        kind: isPdf ? "pdf" : "image",
+        status: "failed",
+      });
+      setReceiptError(
+        error instanceof Error ? error.message : "The receipt could not be uploaded. Please try again.",
+      );
+    } finally {
+      setUploading(false);
+    }
   }
 
+  async function uploadReceipt(file: File): Promise<Receipt> {
+    const formData = new FormData();
+    formData.append("file", file);
+
+    const response = await fetch("/api/receipts", {
+      method: "POST",
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const message = await response.text();
+      throw new Error(message || "Receipt upload failed.");
+    }
+
+    const data = (await response.json()) as {
+      id: string;
+      url: string;
+      name: string;
+      size: number;
+      kind: "image" | "pdf";
+    };
+
+    return {
+      id: data.id,
+      name: data.name,
+      size: data.size,
+      kind: data.kind,
+      url: data.url,
+      status: "uploaded",
+    };
+  }
+  
   function onSubmit(e: FormEvent) {
     e.preventDefault();
     if (saving) return;
+    
+    if (uploading) {
+      setReceiptError("Please wait until the receipt finishes uploading.");
+      return;
+    }
+
     const value = Number(digits);
     const next: Errors = {};
     if (!value) next.amount = "Enter an amount greater than 0.";
@@ -370,32 +443,57 @@ export default function TransactionDrawer({ mode, onClose, onToast }: Props) {
           </Labeled>
 
           <div className="rounded-xl border border-ink-200 bg-ink-100/50 p-4">
-            <input ref={fileRef} type="file" accept=".jpg,.jpeg,.png,.pdf,image/jpeg,image/png,application/pdf" className="hidden" onChange={onFile} aria-label="Receipt file" />
+            <input
+              ref={fileRef}
+              type="file"
+              accept=".jpg,.jpeg,.png,.pdf,image/jpeg,image/png,application/pdf"
+              className="hidden"
+              onChange={onFile}
+              aria-label="Receipt file"
+            />
+
             {receipt ? (
               <div>
                 <div className="flex items-start gap-2.5">
-                  <span className="mt-0.5 text-accent-600">{receipt.kind === "pdf" ? <FileIcon className="h-5 w-5" /> : <PaperclipIcon className="h-5 w-5" />}</span>
+                  <span className="mt-0.5 text-accent-600">
+                    {receipt.kind === "pdf" ? <FileIcon className="h-5 w-5" /> : <PaperclipIcon className="h-5 w-5" />}
+                  </span>
+
                   <div className="min-w-0">
                     <p className="truncate text-sm font-semibold text-ink-900">{receipt.name}</p>
-                    <p className="mt-0.5 text-xs text-ink-500">{attachedLabel}</p>
+                    <p className="mt-0.5 text-xs text-ink-500">
+                      {receipt.status === "uploading" && "Uploading…"}
+                      {receipt.status === "uploaded" && attachedLabel}
+                      {receipt.status === "failed" && "Upload failed"}
+                      {!receipt.status && attachedLabel}
+                    </p>
                   </div>
                 </div>
+
+                {uploadError && (
+                  <p role="alert" className="mt-2 text-xs text-red-600">
+                    {uploadError}
+                  </p>
+                )}
+
                 <div className="mt-3 grid grid-cols-[1fr_auto] gap-2">
                   <button
                     type="button"
                     onClick={() => fileRef.current?.click()}
-                    className="h-10 rounded-xl border border-ink-200 bg-white text-sm font-semibold text-accent-600 transition hover:bg-accent-50 focus:outline-none focus-visible:ring-4 focus-visible:ring-accent-200"
+                    disabled={uploading}
+                    className="h-10 rounded-xl border border-ink-200 bg-white text-sm font-semibold text-accent-600 transition hover:bg-accent-50 disabled:cursor-not-allowed disabled:opacity-50"
                   >
-                    Replace receipt
+                    {receipt.status === "uploading" ? "Uploading..." : "Replace receipt"}
                   </button>
+
                   <button
                     type="button"
-                    onClick={() => {
-                      setReceipt(undefined);
-                      setReceiptError(null);
-                    }}
-                    className="h-10 rounded-xl px-3 text-sm font-medium text-ink-500 transition hover:text-red-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-400"
-                  >
+                      onClick={() => {
+                        setReceipt(undefined);
+                        setReceiptError(null);
+                      }}
+                    className="h-10 rounded-xl px-3 text-sm font-medium text-ink-500 transition hover:text-red-600"
+                  >   
                     Remove
                   </button>
                 </div>
@@ -407,6 +505,7 @@ export default function TransactionDrawer({ mode, onClose, onToast }: Props) {
                 </span>
                 <p className="mt-1.5 text-sm font-semibold text-ink-900">Attach receipt</p>
                 <p className="mt-0.5 text-xs text-ink-500">JPG, PNG or PDF · up to 10 MB</p>
+
                 <button
                   type="button"
                   onClick={() => fileRef.current?.click()}
@@ -415,11 +514,6 @@ export default function TransactionDrawer({ mode, onClose, onToast }: Props) {
                   Choose receipt
                 </button>
               </div>
-            )}
-            {receiptError && (
-              <p role="alert" className="mt-2 text-xs text-red-600">
-                {receiptError}
-              </p>
             )}
           </div>
         </div>

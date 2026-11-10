@@ -14,7 +14,18 @@ export type AccountId = "cash" | "momo" | "vietcombank";
 export type TransactionStatus = "confirmed" | "needs_review" | "processing";
 
 /** Only metadata is kept in the browser. Real file upload belongs to your backend. */
-export type Receipt = { name: string; size: number; kind: "image" | "pdf" };
+export type ReceiptStatus = "local" | "uploading" | "uploaded" | "failed";
+
+export type Receipt = {
+  id?: string;
+  name: string;
+  size: number;
+  kind: "image" | "pdf";
+  url?: string;
+  status?: ReceiptStatus;
+  uploadedAt?: string;
+  error?: string;
+};
 
 export type Transaction = {
   id: string;
