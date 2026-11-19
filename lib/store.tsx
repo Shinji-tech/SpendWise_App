@@ -12,7 +12,7 @@ const LEGACY_KEY = "spendwise.transactions.v1";
 
 /** Fields the caller provides when creating a transaction. */
 export type NewTransaction = Pick<Transaction, "type" | "title" | "note" | "amount" | "date" | "category" | "account"> &
-  Partial<Pick<Transaction, "receipt">>;
+  Partial<Pick<Transaction, "receipt">> & { status?: "needs_review" };
 /** Fields that may change when editing. Setting `receipt: undefined` removes the receipt. */
 export type TransactionPatch = Partial<Omit<Transaction, "id" | "createdAt">>;
 
@@ -101,7 +101,7 @@ export function TransactionsProvider({ children }: { children: ReactNode }) {
 
   const addTransaction = useCallback(
     (input: NewTransaction) => {
-      const created: Transaction = { ...input, id: newId(), status: "confirmed", createdAt: Date.now() };
+      const created: Transaction = { ...input, id: newId(), status: input.status ?? "confirmed", createdAt: Date.now() };
       commit((prev) => [...prev, created]);
       return created;
     },

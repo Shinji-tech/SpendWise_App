@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from "react";
 import {
   ACCOUNTS,
@@ -11,6 +12,7 @@ import {
   type TransactionCategory,
 } from "@/lib/data";
 import { formatBytes, formatDate, formatVnd, toISODate } from "@/lib/format";
+import { scanReceipt, type ScanProgress } from "@/lib/receipt-scanner";
 import { useTransactions } from "@/lib/store";
 import { ChevronDownIcon, CloseIcon, FileIcon, PaperclipIcon, TrashIcon } from "../app-icons";
 import Alert from "../Alert";
@@ -52,6 +54,8 @@ export default function TransactionDrawer({ mode, onClose, onToast }: Props) {
   const uid = useId();
   const panelRef = useRef<HTMLFormElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const receiptFile = useRef<File | null>(null);
+  const originalReceiptId = useRef(existing?.receipt?.id);
   const returnFocus = useRef<Element | null>(null);
 
   const [type, setType] = useState<"expense" | "income">(existing?.type ?? "expense");
@@ -62,11 +66,48 @@ export default function TransactionDrawer({ mode, onClose, onToast }: Props) {
   const [date, setDate] = useState(existing?.date ?? toISODate(now));
   const [note, setNote] = useState(existing?.note ?? "");
   const [receipt, setReceipt] = useState<Receipt | undefined>(existing?.receipt);
-  const [uploading, setUploading] = useState(false);
-  const [uploadError, setUploadError] = useState<string | null>(null);  const [errors, setErrors] = useState<Errors>({});
+  const [receiptPreview, setReceiptPreview] = useState<string | null>(null);
+  const [scanning, setScanning] = useState(false);
+  const [scanWasUsed, setScanWasUsed] = useState(false);
+  const [scanProgress, setScanProgress] = useState<ScanProgress | null>(null);
+  const [scanMessage, setScanMessage] = useState<string | null>(null);
+  const [scanError, setScanError] = useState<string | null>(null);
+  const [scanConfidence, setScanConfidence] = useState<number | null>(null);
+  const [errors, setErrors] = useState<Errors>({});
   const [receiptError, setReceiptError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+
+  useEffect(() => {
+    return () => {
+      if (receiptPreview) URL.revokeObjectURL(receiptPreview);
+    };
+  }, [receiptPreview]);
+
+  useEffect(() => {
+    const id = existing?.receipt?.id;
+    if (!id) return;
+    let active = true;
+    fetch(`/api/receipts/${encodeURIComponent(id)}`, { cache: "no-store" })
+      .then(async (response) => {
+        if (!response.ok) {
+          const body = (await response.json().catch(() => null)) as { error?: string } | null;
+          throw new Error(body?.error || "Could not load the saved receipt.");
+        }
+        return response.blob();
+      })
+      .then((blob) => {
+        const preview = URL.createObjectURL(blob);
+        if (active && !receiptFile.current) setReceiptPreview(preview);
+        else URL.revokeObjectURL(preview);
+      })
+      .catch((error: unknown) => {
+        if (active) setReceiptError(error instanceof Error ? error.message : "Could not load the saved receipt.");
+      });
+    return () => {
+      active = false;
+    };
+  }, [existing?.receipt?.id]);
 
   // Transaction vanished (deleted elsewhere): nothing left to edit.
   useEffect(() => {
@@ -86,7 +127,7 @@ export default function TransactionDrawer({ mode, onClose, onToast }: Props) {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !saving) {
+      if (e.key === "Escape" && !saving && !scanning) {
         onClose();
         return;
       }
@@ -105,7 +146,7 @@ export default function TransactionDrawer({ mode, onClose, onToast }: Props) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose, saving]);
+  }, [onClose, saving, scanning]);
 
   if (editing && !existing) return null;
 
@@ -137,71 +178,62 @@ export default function TransactionDrawer({ mode, onClose, onToast }: Props) {
     }
 
     setReceiptError(null);
-    setUploading(true);
+    setScanError(null);
+    setScanMessage(null);
+    setScanConfidence(null);
+    setScanProgress({ progress: 0, stage: "Preparing receipt" });
+    setScanning(true);
+    setScanWasUsed(false);
+    setType("expense");
+    setDigits("");
+    setTitle("");
+    setCategory("");
+    setDate(toISODate(new Date()));
+    receiptFile.current = file;
+    setReceiptPreview(URL.createObjectURL(file));
     setReceipt({
       name: file.name,
       size: file.size,
       kind: isPdf ? "pdf" : "image",
-      status: "uploading",
+      status: "local",
     });
 
     try {
-      const uploaded = await uploadReceipt(file);
-      setReceipt(uploaded);
-      setReceiptError(null);
-    } catch (error) {
-      setReceipt({
-        name: file.name,
-        size: file.size,
-        kind: isPdf ? "pdf" : "image",
-        status: "failed",
-      });
-      setReceiptError(
-        error instanceof Error ? error.message : "The receipt could not be uploaded. Please try again.",
+      const result = await scanReceipt(file, setScanProgress);
+      setErrors({});
+      if (result.fields.merchant) setTitle(result.fields.merchant.value.slice(0, 60));
+      if (result.fields.amount) setDigits(String(result.fields.amount.value));
+      if (result.fields.date) setDate(result.fields.date.value);
+      if (result.fields.category) setCategory(result.fields.category.value);
+
+      setScanWasUsed(true);
+      setScanConfidence(result.recognitionConfidence);
+      const found = [
+        result.fields.merchant && "merchant",
+        result.fields.amount && "amount",
+        result.fields.date && "date",
+        result.fields.category && "category",
+      ].filter(Boolean);
+      setScanMessage(
+        found.length
+          ? `Suggested ${found.join(", ")}. Review every field before saving.`
+          : "The receipt was read, but no transaction fields were recognized. Enter the details manually before saving.",
       );
+    } catch (error) {
+      setScanWasUsed(true);
+      setScanMessage("Scanning failed. Enter and verify the details manually; this receipt will be saved as a review draft.");
+      setScanError(error instanceof Error ? error.message : "The receipt could not be scanned. Enter the details manually.");
     } finally {
-      setUploading(false);
+      setScanning(false);
     }
   }
 
-  async function uploadReceipt(file: File): Promise<Receipt> {
-    const formData = new FormData();
-    formData.append("file", file);
-
-    const response = await fetch("/api/receipts", {
-      method: "POST",
-      body: formData,
-    });
-
-    if (!response.ok) {
-      const message = await response.text();
-      throw new Error(message || "Receipt upload failed.");
-    }
-
-    const data = (await response.json()) as {
-      id: string;
-      url: string;
-      name: string;
-      size: number;
-      kind: "image" | "pdf";
-    };
-
-    return {
-      id: data.id,
-      name: data.name,
-      size: data.size,
-      kind: data.kind,
-      url: data.url,
-      status: "uploaded",
-    };
-  }
-  
-  function onSubmit(e: FormEvent) {
+  async function onSubmit(e: FormEvent) {
     e.preventDefault();
     if (saving) return;
-    
-    if (uploading) {
-      setReceiptError("Please wait until the receipt finishes uploading.");
+
+    if (scanning) {
+      setReceiptError("Please wait until the receipt scan finishes.");
       return;
     }
 
@@ -221,7 +253,19 @@ export default function TransactionDrawer({ mode, onClose, onToast }: Props) {
     }
 
     setSaving(true);
-    window.setTimeout(() => {
+    try {
+      let savedReceipt = receipt;
+      if (receiptFile.current) {
+        const formData = new FormData();
+        formData.set("file", receiptFile.current);
+        const response = await fetch("/api/receipts", { method: "POST", body: formData });
+        const result = (await response.json().catch(() => null)) as (Receipt & { error?: string }) | null;
+        if (!response.ok || !result) {
+          throw new Error(result?.error || "Could not upload the receipt. Please try again.");
+        }
+        savedReceipt = result;
+      }
+
       const fields = {
         type,
         title: title.trim(),
@@ -230,7 +274,8 @@ export default function TransactionDrawer({ mode, onClose, onToast }: Props) {
         date,
         category: (type === "income" ? "income" : category) as TransactionCategory,
         account: account as AccountId,
-        receipt,
+        receipt: savedReceipt,
+        ...(scanWasUsed && !existing ? { status: "needs_review" as const } : {}),
       };
       if (existing) {
         updateTransaction(existing.id, { ...fields, status: "confirmed" });
@@ -239,24 +284,54 @@ export default function TransactionDrawer({ mode, onClose, onToast }: Props) {
         addTransaction(fields);
         onToast(`${type === "income" ? "Income" : "Expense"} of ${formatVnd(value)} added`);
       }
+
+      receiptFile.current = null;
+      let cleanupFailed = false;
+      if (originalReceiptId.current && originalReceiptId.current !== savedReceipt?.id) {
+        try {
+          const response = await fetch(`/api/receipts/${encodeURIComponent(originalReceiptId.current)}`, { method: "DELETE" });
+          cleanupFailed = !response.ok;
+        } catch (error) {
+          console.error("Could not remove the replaced receipt:", error);
+          cleanupFailed = true;
+        }
+      }
+      if (cleanupFailed) onToast("Saved, but the replaced receipt could not be removed from server storage.");
       onClose();
-    }, 350);
+    } catch (error) {
+      setReceiptError(error instanceof Error ? error.message : "Could not save this transaction.");
+      setSaving(false);
+    }
   }
 
-  function onDelete() {
+  async function onDelete() {
     if (!existing) return;
+    if (existing.receipt?.id) {
+      setSaving(true);
+      try {
+        const response = await fetch(`/api/receipts/${encodeURIComponent(existing.receipt.id)}`, { method: "DELETE" });
+        if (!response.ok) {
+          const result = (await response.json().catch(() => null)) as { error?: string } | null;
+          throw new Error(result?.error || "Could not remove the saved receipt.");
+        }
+      } catch (error) {
+        setReceiptError(error instanceof Error ? error.message : "Could not remove the saved receipt.");
+        setSaving(false);
+        return;
+      }
+    }
     deleteTransaction(existing.id);
     onToast("Transaction deleted");
     onClose();
   }
 
   const heading = editing ? "Edit transaction" : "Add transaction";
-  const submitLabel = editing ? (draft ? "Confirm transaction" : "Save changes") : "Add transaction";
-  const attachedLabel = receipt ? `Receipt attached · 1 ${receipt.kind === "pdf" ? "PDF" : "image"}${receipt.size ? ` · ${formatBytes(receipt.size)}` : ""}` : "";
+  const submitLabel = editing ? (draft ? "Confirm transaction" : "Save changes") : scanWasUsed ? "Save review draft" : "Add transaction";
+  const attachedLabel = receipt ? `Receipt selected · 1 ${receipt.kind === "pdf" ? "PDF" : "image"}${receipt.size ? ` · ${formatBytes(receipt.size)}` : ""}` : "";
 
   return (
     <div className="fixed inset-0 z-[60]">
-      <div className="absolute inset-0 animate-fade-in bg-ink-900/40" onMouseDown={() => !saving && onClose()} aria-hidden="true" />
+      <div className="absolute inset-0 animate-fade-in bg-ink-900/40" onMouseDown={() => !saving && !scanning && onClose()} aria-hidden="true" />
 
       <form
         ref={panelRef}
@@ -291,8 +366,9 @@ export default function TransactionDrawer({ mode, onClose, onToast }: Props) {
             <button
               type="button"
               onClick={onClose}
+              disabled={saving || scanning}
               aria-label="Close"
-              className="rounded-lg p-1.5 text-ink-500 transition hover:bg-ink-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-400"
+              className="rounded-lg p-1.5 text-ink-500 transition hover:bg-ink-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-400 disabled:opacity-50"
             >
               <CloseIcon className="h-5 w-5" />
             </button>
@@ -303,6 +379,11 @@ export default function TransactionDrawer({ mode, onClose, onToast }: Props) {
           {draft && (
             <Alert tone="info">
               This is a receipt draft. It isn&apos;t counted in your balance, budgets or analytics until you confirm it. Check the details below.
+            </Alert>
+          )}
+          {scanWasUsed && !existing && (
+            <Alert tone="info">
+              Check the suggested fields against the receipt. Saving creates a review draft that stays out of your totals until you confirm it.
             </Alert>
           )}
 
@@ -449,6 +530,7 @@ export default function TransactionDrawer({ mode, onClose, onToast }: Props) {
               accept=".jpg,.jpeg,.png,.pdf,image/jpeg,image/png,application/pdf"
               className="hidden"
               onChange={onFile}
+              disabled={scanning}
               aria-label="Receipt file"
             />
 
@@ -462,17 +544,61 @@ export default function TransactionDrawer({ mode, onClose, onToast }: Props) {
                   <div className="min-w-0">
                     <p className="truncate text-sm font-semibold text-ink-900">{receipt.name}</p>
                     <p className="mt-0.5 text-xs text-ink-500">
-                      {receipt.status === "uploading" && "Uploading…"}
-                      {receipt.status === "uploaded" && attachedLabel}
-                      {receipt.status === "failed" && "Upload failed"}
-                      {!receipt.status && attachedLabel}
+                      {receipt.status === "local" ? `${attachedLabel} · original file is not saved` : attachedLabel}
                     </p>
                   </div>
                 </div>
 
-                {uploadError && (
+                {receiptPreview && (
+                  receipt.kind === "image" ? (
+                    // The preview stays in memory only while this drawer is open.
+                    <Image
+                      src={receiptPreview}
+                      alt="Selected receipt preview"
+                      width={800}
+                      height={600}
+                      unoptimized
+                      className="mt-3 max-h-40 w-full rounded-lg border border-ink-200 bg-white object-contain"
+                    />
+                  ) : (
+                    <iframe title="Selected invoice preview" src={receiptPreview} className="mt-3 h-40 w-full rounded-lg border border-ink-200 bg-white" />
+                  )
+                )}
+
+                {scanProgress && scanning && (
+                  <div className="mt-3" role="status" aria-live="polite">
+                    <div className="mb-1 flex justify-between text-xs text-ink-500">
+                      <span>{scanProgress.stage}</span>
+                      <span>{Math.round(scanProgress.progress * 100)}%</span>
+                    </div>
+                    <div
+                      role="progressbar"
+                      aria-label="Receipt scan progress"
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      aria-valuenow={Math.round(scanProgress.progress * 100)}
+                      className="h-1.5 overflow-hidden rounded-full bg-ink-200"
+                    >
+                      <div className="h-full rounded-full bg-accent-600 transition-all" style={{ width: `${Math.round(scanProgress.progress * 100)}%` }} />
+                    </div>
+                  </div>
+                )}
+
+                {scanMessage && (
+                  <p role="status" className="mt-2 text-xs text-emerald-700">
+                    {scanMessage}
+                    {scanConfidence !== null && ` OCR confidence: ${Math.round(scanConfidence)}%.`}
+                  </p>
+                )}
+
+                {scanError && (
                   <p role="alert" className="mt-2 text-xs text-red-600">
-                    {uploadError}
+                    {scanError}
+                  </p>
+                )}
+                {receiptError && (
+                  <p role="alert" className="mt-2 text-xs text-red-600">
+                    {receiptError}
                   </p>
                 )}
 
@@ -480,20 +606,28 @@ export default function TransactionDrawer({ mode, onClose, onToast }: Props) {
                   <button
                     type="button"
                     onClick={() => fileRef.current?.click()}
-                    disabled={uploading}
+                    disabled={scanning}
                     className="h-10 rounded-xl border border-ink-200 bg-white text-sm font-semibold text-accent-600 transition hover:bg-accent-50 disabled:cursor-not-allowed disabled:opacity-50"
                   >
-                    {receipt.status === "uploading" ? "Uploading..." : "Replace receipt"}
+                    {scanning ? "Scanning..." : "Scan another receipt"}
                   </button>
 
                   <button
                     type="button"
-                      onClick={() => {
-                        setReceipt(undefined);
-                        setReceiptError(null);
-                      }}
+                    onClick={() => {
+                      receiptFile.current = null;
+                      setReceipt(undefined);
+                      setReceiptPreview(null);
+                      setReceiptError(null);
+                      setScanWasUsed(false);
+                      setScanProgress(null);
+                      setScanMessage(null);
+                      setScanError(null);
+                      setScanConfidence(null);
+                    }}
+                    disabled={scanning}
                     className="h-10 rounded-xl px-3 text-sm font-medium text-ink-500 transition hover:text-red-600"
-                  >   
+                  >
                     Remove
                   </button>
                 </div>
@@ -509,9 +643,10 @@ export default function TransactionDrawer({ mode, onClose, onToast }: Props) {
                 <button
                   type="button"
                   onClick={() => fileRef.current?.click()}
-                  className="mt-3 h-10 w-full rounded-xl border border-ink-200 bg-white text-sm font-semibold text-accent-600 transition hover:bg-accent-50 focus:outline-none focus-visible:ring-4 focus-visible:ring-accent-200"
+                  disabled={scanning}
+                  className="mt-3 h-10 w-full rounded-xl border border-ink-200 bg-white text-sm font-semibold text-accent-600 transition hover:bg-accent-50 focus:outline-none focus-visible:ring-4 focus-visible:ring-accent-200 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  Choose receipt
+                  Scan receipt
                 </button>
               </div>
             )}
@@ -521,7 +656,7 @@ export default function TransactionDrawer({ mode, onClose, onToast }: Props) {
         <footer className="space-y-2 border-t border-ink-200 bg-white px-6 py-3.5">
           <button
             type="submit"
-            disabled={saving}
+            disabled={saving || scanning}
             className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-xl bg-accent-600 text-sm font-semibold text-white transition hover:bg-accent-700 focus:outline-none focus-visible:ring-4 focus-visible:ring-accent-200 disabled:bg-accent-400"
           >
             {saving && <SpinnerIcon />}
@@ -530,7 +665,7 @@ export default function TransactionDrawer({ mode, onClose, onToast }: Props) {
           <button
             type="button"
             onClick={onClose}
-            disabled={saving}
+            disabled={saving || scanning}
             className="h-10 w-full rounded-xl border border-ink-200 bg-white text-sm font-semibold text-accent-600 transition hover:bg-accent-50 focus:outline-none focus-visible:ring-4 focus-visible:ring-accent-200 disabled:opacity-60"
           >
             Cancel
@@ -542,7 +677,7 @@ export default function TransactionDrawer({ mode, onClose, onToast }: Props) {
               <span className="flex shrink-0 gap-1.5">
                 <button
                   type="button"
-                  onClick={onDelete}
+                  onClick={() => void onDelete()}
                   className="rounded-lg bg-red-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-red-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-300"
                 >
                   Delete

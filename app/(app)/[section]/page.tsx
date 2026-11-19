@@ -2,7 +2,6 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 const SECTIONS: Record<string, { title: string; blurb: string }> = {
-  "scan-receipt": { title: "Scan receipt", blurb: "Snap a receipt and turn it into a transaction." },
   budgets: { title: "Budgets", blurb: "Set monthly limits per category and track them." },
   goals: { title: "Goals", blurb: "Create saving goals and watch them fill up." },
   analytics: { title: "Analytics", blurb: "Trends and breakdowns across months." },

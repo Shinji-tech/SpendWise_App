@@ -17,6 +17,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const router = useRouter();
   const { transactions, ready, now } = useTransactions();
   const [session, setSession] = useState<Session | null>(null);
+  const [sessionError, setSessionError] = useState<string | null>(null);
   const [navOpen, setNavOpen] = useState(false);
   const [drawer, setDrawer] = useState<DrawerMode | null>(null);
   const [advisorOpen, setAdvisorOpen] = useState(false);
@@ -24,12 +25,22 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    const s = getSession();
-    if (!s) {
-      router.replace("/sign-in");
-      return;
-    }
-    startTransition(() => setSession(s));
+    let active = true;
+    getSession()
+      .then((s) => {
+        if (!active) return;
+        if (!s) {
+          router.replace("/sign-in");
+          return;
+        }
+        startTransition(() => setSession(s));
+      })
+      .catch((error: unknown) => {
+        if (active) setSessionError(error instanceof Error ? error.message : "Could not verify your session.");
+      });
+    return () => {
+      active = false;
+    };
   }, [router]);
 
   useEffect(() => () => {
@@ -54,6 +65,14 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const openAdd = useCallback(() => setDrawer({ kind: "add" }), []);
   const openEdit = useCallback((id: string) => setDrawer({ kind: "edit", id }), []);
   const shell = useMemo(() => ({ summary, firstName, openAdd, openEdit, showToast }), [summary, firstName, openAdd, openEdit, showToast]);
+
+  if (sessionError) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-ink-100 px-6 text-center">
+        <p role="alert" className="max-w-lg text-sm text-red-700">{sessionError}</p>
+      </div>
+    );
+  }
 
   if (!session || !ready) {
     return <div className="min-h-screen bg-ink-100" aria-busy="true" />;
@@ -96,8 +115,9 @@ export default function AppShell({ children }: { children: ReactNode }) {
           <UserMenu
             session={session}
             onSignOut={() => {
-              signOut();
-              router.push("/sign-in");
+              void signOut()
+                .then(() => router.replace("/sign-in"))
+                .catch((error: unknown) => showToast(error instanceof Error ? error.message : "Could not sign out."));
             }}
           />
         </header>

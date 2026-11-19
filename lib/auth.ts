@@ -1,16 +1,4 @@
-/**
- * Mock auth layer for the SpendWise frontend.
- *
- * Accounts and the session live in the browser's localStorage so every screen
- * is fully interactive without a backend. Replace the bodies of these
- * functions with real API calls (keeping the signatures) when your backend is ready.
- */
-
-const USERS_KEY = "spendwise.users";
-const SESSION_KEY = "spendwise.session";
-
 export type Session = { name: string; email: string };
-type StoredUser = Session & { passwordHash: string };
 
 export class AuthError extends Error {
   constructor(message: string) {
@@ -19,56 +7,35 @@ export class AuthError extends Error {
   }
 }
 
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+async function request<T>(url: string, init?: RequestInit): Promise<T> {
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      ...init,
+      headers: { "Content-Type": "application/json", ...init?.headers },
+      cache: "no-store",
+    });
+  } catch {
+    throw new AuthError("The server couldn't be reached. Please try again.");
+  }
 
-async function hash(value: string): Promise<string> {
-  if (typeof crypto === "undefined" || !crypto.subtle) return `plain:${value}`;
-  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
-  return Array.from(new Uint8Array(buf))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
+  const body = (await response.json().catch(() => null)) as { error?: string } | null;
+  if (!response.ok) {
+    if (response.status === 401 && url === "/api/auth") {
+      throw new AuthError("Incorrect email or password.");
+    }
+    throw new AuthError(body?.error || "Authentication failed. Please try again.");
+  }
+  return body as T;
 }
 
-function readUsers(): StoredUser[] {
-  try {
-    const raw = window.localStorage.getItem(USERS_KEY);
-    return raw ? (JSON.parse(raw) as StoredUser[]) : [];
-  } catch {
-    return [];
-  }
+export async function getSession(): Promise<Session | null> {
+  const result = await request<{ session: Session | null }>("/api/auth");
+  return result.session;
 }
 
-function writeUsers(users: StoredUser[]) {
-  try {
-    window.localStorage.setItem(USERS_KEY, JSON.stringify(users));
-  } catch {
-    throw new AuthError("Your browser blocked local storage, so we couldn't save your account.");
-  }
-}
-
-function setSession(session: Session) {
-  try {
-    window.localStorage.setItem(SESSION_KEY, JSON.stringify(session));
-  } catch {
-    /* ignore */
-  }
-}
-
-export function getSession(): Session | null {
-  try {
-    const raw = window.localStorage.getItem(SESSION_KEY);
-    return raw ? (JSON.parse(raw) as Session) : null;
-  } catch {
-    return null;
-  }
-}
-
-export function signOut() {
-  try {
-    window.localStorage.removeItem(SESSION_KEY);
-  } catch {
-    /* ignore */
-  }
+export async function signOut(): Promise<void> {
+  await request<{ ok: boolean }>("/api/auth", { method: "DELETE" });
 }
 
 export async function registerUser(input: {
@@ -76,34 +43,22 @@ export async function registerUser(input: {
   email: string;
   password: string;
 }): Promise<Session> {
-  await sleep(800);
-  const email = input.email.trim().toLowerCase();
-  const users = readUsers();
-  if (users.some((u) => u.email === email)) {
-    throw new AuthError("An account with this email already exists. Try logging in instead.");
-  }
-  const session: Session = { name: input.name.trim(), email };
-  writeUsers([...users, { ...session, passwordHash: await hash(input.password) }]);
-  setSession(session);
-  return session;
+  const result = await request<{ session: Session }>("/api/auth", {
+    method: "POST",
+    body: JSON.stringify({ action: "register", ...input }),
+  });
+  return result.session;
 }
 
 export async function loginUser(input: { email: string; password: string }): Promise<Session> {
-  await sleep(700);
-  const email = input.email.trim().toLowerCase();
-  const user = readUsers().find((u) => u.email === email);
-  if (!user || user.passwordHash !== (await hash(input.password))) {
-    throw new AuthError("Incorrect email or password.");
-  }
-  const session: Session = { name: user.name, email: user.email };
-  setSession(session);
-  return session;
+  const result = await request<{ session: Session }>("/api/auth", {
+    method: "POST",
+    body: JSON.stringify({ action: "login", ...input }),
+  });
+  return result.session;
 }
 
-/**
- * Always resolves, whether or not the email has an account, so the screen never
- * reveals which emails are registered. Wire this to your real reset endpoint.
- */
-export async function requestPasswordReset(_email: string): Promise<void> {
-  await sleep(800);
+export async function requestPasswordReset(email: string): Promise<void> {
+  if (!email.trim()) throw new AuthError("Please enter your email.");
+  throw new AuthError("Password reset isn't configured yet. Contact the administrator for help.");
 }
