@@ -1,6 +1,6 @@
 "use client";
 
-import { ACCOUNTS, CATEGORY_LABEL, type AccountId, type TransactionCategory } from "@/lib/data";
+import { CATEGORY_LABEL, type FinancialAccount, type TransactionCategory } from "@/lib/data";
 import {
   DEFAULT_FILTERS,
   PRESET_LABEL,
@@ -12,11 +12,11 @@ import {
 import { CloseIcon, SearchIcon } from "../app-icons";
 import FilterSelect from "./FilterSelect";
 
-type Props = { filters: Filters; onChange: (next: Filters) => void; now: Date };
+type Props = { filters: Filters; onChange: (next: Filters) => void; now: Date; accounts: FinancialAccount[] };
 
 const CATEGORY_ORDER: TransactionCategory[] = ["food", "transport", "shopping", "utilities", "housing", "other", "income"];
 
-export default function TransactionFilters({ filters, onChange, now }: Props) {
+export default function TransactionFilters({ filters, onChange, now, accounts }: Props) {
   const set = <K extends keyof Filters>(key: K, value: Filters[K]) => onChange({ ...filters, [key]: value });
   const isDefault = filtersAreDefault(filters);
 
@@ -76,7 +76,13 @@ export default function TransactionFilters({ filters, onChange, now }: Props) {
           value={filters.account}
           active={filters.account !== "all"}
           onChange={(v) => set("account", v as Filters["account"])}
-          options={[{ value: "all", label: "All" }, ...ACCOUNTS.map((a: { id: AccountId; name: string }) => ({ value: a.id, label: a.name }))]}
+          options={[
+            { value: "all", label: "All" },
+            ...accounts.map((account) => ({
+              value: account.id,
+              label: account.archived ? `${account.name} (archived)` : account.name,
+            })),
+          ]}
         />
         <FilterSelect
           label="Date"

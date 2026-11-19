@@ -3,7 +3,16 @@ import { toISODate } from "./format";
 export type CategoryId = "housing" | "utilities" | "shopping" | "food" | "transport" | "other";
 export type TransactionCategory = CategoryId | "income";
 
-export type AccountId = "cash" | "momo" | "vietcombank";
+export type AccountId = string;
+export type AccountType = "cash" | "wallet" | "bank";
+export type FinancialAccount = {
+  id: AccountId;
+  name: string;
+  type: AccountType;
+  openingBalance: number;
+  archived: boolean;
+  createdAt: number;
+};
 
 /**
  * confirmed     = posted: counts toward balance, budgets and analytics
@@ -55,16 +64,10 @@ export const CATEGORY_LABEL: Record<TransactionCategory, string> = {
 
 export const EXPENSE_CATEGORIES: CategoryId[] = ["food", "transport", "shopping", "utilities", "housing", "other"];
 
-export const ACCOUNTS: { id: AccountId; name: string }[] = [
-  { id: "cash", name: "Cash" },
-  { id: "momo", name: "MoMo" },
-  { id: "vietcombank", name: "Vietcombank" },
-];
-
-export const ACCOUNT_LABEL: Record<AccountId, string> = {
+export const ACCOUNT_TYPE_LABEL: Record<AccountType, string> = {
   cash: "Cash",
-  momo: "MoMo",
-  vietcombank: "Vietcombank",
+  wallet: "E-wallet",
+  bank: "Bank",
 };
 
 export const isDraft = (t: Pick<Transaction, "status">) => t.status !== "confirmed";
@@ -84,9 +87,6 @@ export const GOALS: Goal[] = [
   { id: "emergency", name: "Emergency fund", saved: 3_000_000, target: 6_000_000, due: "2027-01-31" },
   { id: "laptop", name: "New laptop", saved: 1_200_000, target: 6_000_000, due: "2027-04-30" },
 ];
-
-/** Balance before the first recorded transaction. */
-export const OPENING_BALANCE = 0;
 
 const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 

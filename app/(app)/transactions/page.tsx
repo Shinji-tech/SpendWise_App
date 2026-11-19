@@ -6,13 +6,14 @@ import Pagination from "@/components/transactions/Pagination";
 import TransactionFilters from "@/components/transactions/TransactionFilters";
 import TransactionTable from "@/components/transactions/TransactionTable";
 import type { TransactionCategory } from "@/lib/data";
-import { formatVnd } from "@/lib/format";
+import { formatDate, formatVnd } from "@/lib/format";
 import { useTransactions } from "@/lib/store";
 import {
   DEFAULT_FILTERS,
   PAGE_SIZE,
   applyFilters,
   countRecords,
+  draftsForReview,
   filtersAreDefault,
   sortTransactions,
   type Filters,
@@ -21,9 +22,10 @@ import {
 } from "@/lib/transactions";
 
 export default function TransactionsPage() {
-  const { transactions, now } = useTransactions();
+  const { transactions, accounts, now } = useTransactions();
   const { summary, openAdd, openEdit } = useShell();
 
+  const drafts = useMemo(() => draftsForReview(transactions), [transactions]);
   const [filters, setFiltersState] = useState<Filters>(DEFAULT_FILTERS);
   const [sort, setSort] = useState<SortState>({ key: "date", dir: "desc" });
   const [page, setPage] = useState(1);
@@ -33,7 +35,7 @@ export default function TransactionsPage() {
     setPage(1);
   };
 
-  const sorted = useMemo(() => sortTransactions(applyFilters(transactions, filters, now), sort), [transactions, filters, now, sort]);
+  const sorted = useMemo(() => sortTransactions(applyFilters(transactions, filters, now, accounts), sort), [transactions, filters, now, accounts, sort]);
   const counts = countRecords(sorted);
   const pageCount = Math.max(1, Math.ceil(sorted.length / PAGE_SIZE));
   const current = Math.min(page, pageCount);
@@ -59,6 +61,36 @@ export default function TransactionsPage() {
         <p className="mt-0.5 text-sm text-ink-500">Every income, expense and receipt. Only your records.</p>
       </div>
 
+      {drafts.length > 0 && (
+        <section className="rounded-2xl border border-amber-200 bg-amber-50/70 p-4 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
+          <div>
+            <h2 className="text-sm font-semibold text-ink-900">Receipt drafts to review</h2>
+            <p className="mt-0.5 text-xs text-ink-600">
+              {drafts.length} draft{drafts.length === 1 ? "" : "s"} · not included in totals · this list ignores the date filter
+            </p>
+          </div>
+          <ul className="mt-2 divide-y divide-amber-200/70">
+            {drafts.map((draft) => (
+              <li key={draft.id}>
+                <button
+                  type="button"
+                  onClick={() => openEdit(draft.id)}
+                  className="flex w-full items-center justify-between gap-3 py-2 text-left outline-none focus-visible:rounded-lg focus-visible:ring-2 focus-visible:ring-accent-400"
+                >
+                  <span className="min-w-0">
+                    <span className="block truncate text-sm font-medium text-ink-900">{draft.title || "Receipt needs review"}</span>
+                    <span className="block text-xs text-ink-600">{formatDate(draft.date)} · {draft.receipt?.name ?? "Receipt attached"}</span>
+                  </span>
+                  <span className="shrink-0 text-sm font-semibold tabular-nums text-ink-900">
+                    {formatVnd(draft.amount)} <span className="text-accent-700">· Review</span>
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4">
         <div className="rounded-2xl border border-ink-200 bg-white px-5 py-3.5 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
           <p className="text-xs font-medium text-ink-500">{month} income</p>
@@ -70,7 +102,7 @@ export default function TransactionsPage() {
         </div>
       </div>
 
-      <TransactionFilters filters={filters} onChange={setFilters} now={now} />
+      <TransactionFilters filters={filters} onChange={setFilters} now={now} accounts={accounts} />
 
       <section className="rounded-2xl border border-ink-200 bg-white pb-4 pt-5 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
         <header className="px-5 pb-4">
@@ -119,6 +151,7 @@ export default function TransactionsPage() {
               onSort={onSort}
               onOpen={openEdit}
               onCategory={(c: TransactionCategory) => setFilters({ ...filters, category: c })}
+              accounts={accounts}
             />
             <div className="mt-3 flex flex-col items-start justify-between gap-3 border-t border-ink-200 px-5 pt-4 sm:flex-row sm:items-center">
               <p className="text-xs text-ink-500">

@@ -1,4 +1,4 @@
-import { ACCOUNT_LABEL, CATEGORY_LABEL, isDraft, type AccountId, type Transaction, type TransactionCategory } from "./data";
+import { CATEGORY_LABEL, isDraft, type AccountId, type FinancialAccount, type Transaction, type TransactionCategory } from "./data";
 import { toISODate } from "./format";
 
 export type DatePreset = "this_month" | "last_month" | "last_3_months" | "this_year" | "all" | "custom";
@@ -77,9 +77,10 @@ export function dateRangeLabel(f: Pick<Filters, "preset" | "from" | "to">, now: 
   return a.y === b.y ? `${a.label} – ${b.label} ${b.y}` : `${a.label} ${a.y} – ${b.label} ${b.y}`;
 }
 
-export function applyFilters(list: Transaction[], f: Filters, now: Date): Transaction[] {
+export function applyFilters(list: Transaction[], f: Filters, now: Date, accounts: FinancialAccount[] = []): Transaction[] {
   const q = f.query.trim().toLowerCase();
   const { from, to } = dateRange(f, now);
+  const accountNames = new Map(accounts.map((account) => [account.id, account.name]));
   return list.filter((t) => {
     if (f.type !== "all" && t.type !== f.type) return false;
     if (f.category !== "all" && t.category !== f.category) return false;
@@ -87,11 +88,15 @@ export function applyFilters(list: Transaction[], f: Filters, now: Date): Transa
     if (from && t.date < from) return false;
     if (to && t.date > to) return false;
     if (q) {
-      const haystack = `${t.title} ${t.note} ${CATEGORY_LABEL[t.category]} ${ACCOUNT_LABEL[t.account]} ${t.receipt?.name ?? ""}`.toLowerCase();
+      const haystack = `${t.title} ${t.note} ${CATEGORY_LABEL[t.category]} ${accountNames.get(t.account) ?? t.account} ${t.receipt?.name ?? ""}`.toLowerCase();
       if (!haystack.includes(q)) return false;
     }
     return true;
   });
+}
+
+export function draftsForReview(list: Transaction[]): Transaction[] {
+  return list.filter(isDraft).sort((a, b) => b.createdAt - a.createdAt);
 }
 
 const signed = (t: Transaction) => (t.type === "income" ? t.amount : -t.amount);

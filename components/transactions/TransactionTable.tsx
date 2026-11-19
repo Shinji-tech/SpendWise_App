@@ -1,12 +1,6 @@
 "use client";
 
-import {
-  ACCOUNT_LABEL,
-  CATEGORY_LABEL,
-  type Transaction,
-  type TransactionCategory,
-  type TransactionStatus,
-} from "@/lib/data";
+import { CATEGORY_LABEL, type FinancialAccount, type Transaction, type TransactionCategory, type TransactionStatus } from "@/lib/data";
 import { formatDate, formatSignedVnd } from "@/lib/format";
 import type { SortKey, SortState } from "@/lib/transactions";
 import { ArrowUpIcon, ReceiptIcon } from "../app-icons";
@@ -71,15 +65,17 @@ type Props = {
   onSort: (key: SortKey) => void;
   onOpen: (id: string) => void;
   onCategory: (category: TransactionCategory) => void;
+  accounts: FinancialAccount[];
 };
 
-export default function TransactionTable({ rows, sort, onSort, onOpen, onCategory }: Props) {
+export default function TransactionTable({ rows, sort, onSort, onOpen, onCategory, accounts }: Props) {
+  const accountNames = new Map(accounts.map((account) => [account.id, account.name]));
   return (
     <div role="table" aria-label="Transaction records">
       <div role="rowgroup" className="hidden lg:block">
         <div role="row" className={`grid ${GRID} items-center gap-x-4 border-b border-ink-200 px-5 pb-2.5`}>
           <div role="columnheader" className="text-xs font-medium text-ink-500">
-            Merchant / description
+            Details
           </div>
           <div role="columnheader" className="text-xs font-medium text-ink-500">
             Category
@@ -148,7 +144,7 @@ export default function TransactionTable({ rows, sort, onSort, onOpen, onCategor
               </div>
 
               <div role="cell" className="hidden truncate pl-3 text-xs text-ink-700 lg:block">
-                {ACCOUNT_LABEL[t.account]}
+                {accountNames.get(t.account) ?? t.account}
               </div>
 
               <div role="cell" className="hidden items-center gap-2.5 lg:flex">
@@ -164,7 +160,7 @@ export default function TransactionTable({ rows, sort, onSort, onOpen, onCategor
                 <span aria-hidden="true">·</span>
                 <span>{formatDate(t.date)}</span>
                 <span aria-hidden="true">·</span>
-                <span>{ACCOUNT_LABEL[t.account]}</span>
+                <span>{accountNames.get(t.account) ?? t.account}</span>
                 {t.receipt && <ReceiptIcon className="h-4 w-4 text-ink-400" />}
                 <StatusPill status={t.status} />
               </div>

@@ -1,4 +1,4 @@
-import { BUDGETS, OPENING_BALANCE, type CategoryId, type Transaction } from "./data";
+import { BUDGETS, type CategoryId, type FinancialAccount, type Transaction } from "./data";
 import { percent, toISODate } from "./format";
 
 export type CategorySpend = { category: CategoryId; amount: number; share: number };
@@ -44,7 +44,7 @@ const SHORT_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "S
 
 const sum = (list: Transaction[]) => list.reduce((acc, t) => acc + t.amount, 0);
 
-export function summarize(all: Transaction[], now: Date): Summary {
+export function summarize(all: Transaction[], now: Date, accounts: FinancialAccount[]): Summary {
   const confirmed = all.filter((t) => t.status === "confirmed");
   const today = toISODate(now);
   const curKey = today.slice(0, 7);
@@ -62,7 +62,7 @@ export function summarize(all: Transaction[], now: Date): Summary {
   const prevExpenses = sum(prev.filter((t) => t.type === "expense"));
 
   const balance =
-    OPENING_BALANCE +
+    accounts.reduce((total, account) => total + account.openingBalance, 0) +
     sum(confirmed.filter((t) => t.type === "income")) -
     sum(confirmed.filter((t) => t.type === "expense"));
 
@@ -71,6 +71,7 @@ export function summarize(all: Transaction[], now: Date): Summary {
     const c = t.category as CategoryId;
     spentBy.set(c, (spentBy.get(c) ?? 0) + t.amount);
   }
+
   const byCategory: CategorySpend[] = [...spentBy.entries()]
     .map(([category, amount]) => ({ category, amount, share: percent(amount, expenses) }))
     .sort((a, b) => b.amount - a.amount);
@@ -108,4 +109,12 @@ export function summarize(all: Transaction[], now: Date): Summary {
     prevMonthLabel: `${SHORT_MONTHS[prevDate.getMonth()]} ${prevDate.getFullYear()}`,
     recent,
   };
+}
+
+export function balanceForAccount(account: FinancialAccount, transactions: Transaction[]): number {
+  const net = transactions.reduce((total, transaction) => {
+    if (transaction.account !== account.id || transaction.status !== "confirmed") return total;
+    return total + (transaction.type === "income" ? transaction.amount : -transaction.amount);
+  }, 0);
+  return account.openingBalance + net;
 }

@@ -1,9 +1,9 @@
 "use client";
 
 import Image from "next/image";
-import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from "react";
+import Link from "next/link";
+import { useCallback, useEffect, useId, useRef, useState, type ChangeEvent, type FormEvent, type ReactNode } from "react";
 import {
-  ACCOUNTS,
   CATEGORY_LABEL,
   EXPENSE_CATEGORIES,
   isDraft,
@@ -20,7 +20,12 @@ import { SpinnerIcon } from "../icons";
 
 export type DrawerMode = { kind: "add" } | { kind: "edit"; id: string };
 
-type Props = { mode: DrawerMode; onClose: () => void; onToast: (message: string) => void };
+type Props = {
+  mode: DrawerMode;
+  initialReceiptFile?: File | null;
+  onClose: () => void;
+  onToast: (message: string) => void;
+};
 type Errors = Partial<Record<"amount" | "title" | "category" | "account" | "date", string>>;
 
 const MAX_RECEIPT_BYTES = 10 * 1024 * 1024;
@@ -45,8 +50,8 @@ function Labeled({ label, htmlFor, error, children }: { label: string; htmlFor: 
 }
 
 /** Slide-over used for both "Add transaction" and "Edit transaction". */
-export default function TransactionDrawer({ mode, onClose, onToast }: Props) {
-  const { transactions, now, addTransaction, updateTransaction, deleteTransaction } = useTransactions();
+export default function TransactionDrawer({ mode, initialReceiptFile, onClose, onToast }: Props) {
+  const { transactions, accounts, now, addTransaction, updateTransaction, deleteTransaction } = useTransactions();
   const existing = mode.kind === "edit" ? transactions.find((t) => t.id === mode.id) : undefined;
   const editing = mode.kind === "edit";
   const draft = existing ? isDraft(existing) : false;
@@ -55,6 +60,8 @@ export default function TransactionDrawer({ mode, onClose, onToast }: Props) {
   const panelRef = useRef<HTMLFormElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const receiptFile = useRef<File | null>(null);
+  const processedInitialFile = useRef<File | null>(null);
+  const scanSaveIntent = useRef<"draft" | "confirm" | null>(null);
   const originalReceiptId = useRef(existing?.receipt?.id);
   const returnFocus = useRef<Element | null>(null);
 
@@ -75,95 +82,11 @@ export default function TransactionDrawer({ mode, onClose, onToast }: Props) {
   const [scanConfidence, setScanConfidence] = useState<number | null>(null);
   const [errors, setErrors] = useState<Errors>({});
   const [receiptError, setReceiptError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
-  useEffect(() => {
-    return () => {
-      if (receiptPreview) URL.revokeObjectURL(receiptPreview);
-    };
-  }, [receiptPreview]);
-
-  useEffect(() => {
-    const id = existing?.receipt?.id;
-    if (!id) return;
-    let active = true;
-    fetch(`/api/receipts/${encodeURIComponent(id)}`, { cache: "no-store" })
-      .then(async (response) => {
-        if (!response.ok) {
-          const body = (await response.json().catch(() => null)) as { error?: string } | null;
-          throw new Error(body?.error || "Could not load the saved receipt.");
-        }
-        return response.blob();
-      })
-      .then((blob) => {
-        const preview = URL.createObjectURL(blob);
-        if (active && !receiptFile.current) setReceiptPreview(preview);
-        else URL.revokeObjectURL(preview);
-      })
-      .catch((error: unknown) => {
-        if (active) setReceiptError(error instanceof Error ? error.message : "Could not load the saved receipt.");
-      });
-    return () => {
-      active = false;
-    };
-  }, [existing?.receipt?.id]);
-
-  // Transaction vanished (deleted elsewhere): nothing left to edit.
-  useEffect(() => {
-    if (editing && !existing && !saving) onClose();
-  }, [editing, existing, saving, onClose]);
-
-  // Focus management: move focus in, trap Tab, restore on close, close on Escape.
-  useEffect(() => {
-    returnFocus.current = document.activeElement;
-    const first = panelRef.current?.querySelector<HTMLElement>("input, select, textarea, button");
-    const id = requestAnimationFrame(() => (document.getElementById(`${uid}-amount`) ?? first)?.focus());
-    return () => {
-      cancelAnimationFrame(id);
-      (returnFocus.current as HTMLElement | null)?.focus?.();
-    };
-  }, [uid]);
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !saving && !scanning) {
-        onClose();
-        return;
-      }
-      if (e.key !== "Tab" || !panelRef.current) return;
-      const items = [...panelRef.current.querySelectorAll<HTMLElement>("input:not([type=file]), select, textarea, button:not(:disabled)")];
-      if (!items.length) return;
-      const firstEl = items[0];
-      const lastEl = items[items.length - 1];
-      if (e.shiftKey && document.activeElement === firstEl) {
-        e.preventDefault();
-        lastEl.focus();
-      } else if (!e.shiftKey && document.activeElement === lastEl) {
-        e.preventDefault();
-        firstEl.focus();
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose, saving, scanning]);
-
-  if (editing && !existing) return null;
-
-  const displayAmount = digits ? Number(digits).toLocaleString("en-US") : "";
-  const clearError = (k: keyof Errors) => setErrors((e) => (e[k] ? { ...e, [k]: undefined } : e));
-
-  function chooseType(next: "expense" | "income") {
-    setType(next);
-    setCategory(next === "income" ? "income" : category === "income" ? "" : category);
-    clearError("category");
-  }
-
-  async function onFile(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    e.target.value = "";
-    if (!file) return;
-
+  const scanFile = useCallback(async (file: File) => {
     const isPdf = file.type === "application/pdf" || /\.pdf$/i.test(file.name);
     const isImage = /^image\/(jpeg|png)$/.test(file.type) || /\.(jpe?g|png)$/i.test(file.name);
 
@@ -226,11 +149,107 @@ export default function TransactionDrawer({ mode, onClose, onToast }: Props) {
     } finally {
       setScanning(false);
     }
+  }, []);
+
+  function onFile(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (file) void scanFile(file);
+  }
+
+  useEffect(() => {
+    return () => {
+      if (receiptPreview) URL.revokeObjectURL(receiptPreview);
+    };
+  }, [receiptPreview]);
+
+  useEffect(() => {
+    const id = existing?.receipt?.id;
+    if (!id) return;
+    let active = true;
+    fetch(`/api/receipts/${encodeURIComponent(id)}`, { cache: "no-store" })
+      .then(async (response) => {
+        if (!response.ok) {
+          const body = (await response.json().catch(() => null)) as { error?: string } | null;
+          throw new Error(body?.error || "Could not load the saved receipt.");
+        }
+        return response.blob();
+      })
+      .then((blob) => {
+        const preview = URL.createObjectURL(blob);
+        if (active && !receiptFile.current) setReceiptPreview(preview);
+        else URL.revokeObjectURL(preview);
+      })
+      .catch((error: unknown) => {
+        if (active) setReceiptError(error instanceof Error ? error.message : "Could not load the saved receipt.");
+      });
+    return () => {
+      active = false;
+    };
+  }, [existing?.receipt?.id]);
+
+  useEffect(() => {
+    if (!initialReceiptFile || processedInitialFile.current === initialReceiptFile) return;
+    processedInitialFile.current = initialReceiptFile;
+    void scanFile(initialReceiptFile);
+  }, [initialReceiptFile, scanFile]);
+
+  // Transaction vanished (deleted elsewhere): nothing left to edit.
+  useEffect(() => {
+    if (editing && !existing && !saving) onClose();
+  }, [editing, existing, saving, onClose]);
+
+  // Focus management: move focus in, trap Tab, restore on close, close on Escape.
+  useEffect(() => {
+    returnFocus.current = document.activeElement;
+    const first = panelRef.current?.querySelector<HTMLElement>("input, select, textarea, button");
+    const id = requestAnimationFrame(() => (document.getElementById(`${uid}-amount`) ?? first)?.focus());
+    return () => {
+      cancelAnimationFrame(id);
+      (returnFocus.current as HTMLElement | null)?.focus?.();
+    };
+  }, [uid]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !saving && !scanning) {
+        onClose();
+        return;
+      }
+      if (e.key !== "Tab" || !panelRef.current) return;
+      const items = [...panelRef.current.querySelectorAll<HTMLElement>("input:not([type=file]), select, textarea, button:not(:disabled)")];
+      if (!items.length) return;
+      const firstEl = items[0];
+      const lastEl = items[items.length - 1];
+      if (e.shiftKey && document.activeElement === firstEl) {
+        e.preventDefault();
+        lastEl.focus();
+      } else if (!e.shiftKey && document.activeElement === lastEl) {
+        e.preventDefault();
+        firstEl.focus();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose, saving, scanning]);
+
+  if (editing && !existing) return null;
+
+  const displayAmount = digits ? Number(digits).toLocaleString("en-US") : "";
+  const clearError = (k: keyof Errors) => setErrors((e) => (e[k] ? { ...e, [k]: undefined } : e));
+
+  function chooseType(next: "expense" | "income") {
+    setType(next);
+    setCategory(next === "income" ? "income" : category === "income" ? "" : category);
+    clearError("category");
   }
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
+    const confirmScannedReceipt = scanSaveIntent.current === "confirm";
+    scanSaveIntent.current = null;
     if (saving) return;
+    setSaveError(null);
 
     if (scanning) {
       setReceiptError("Please wait until the receipt scan finishes.");
@@ -240,7 +259,7 @@ export default function TransactionDrawer({ mode, onClose, onToast }: Props) {
     const value = Number(digits);
     const next: Errors = {};
     if (!value) next.amount = "Enter an amount greater than 0.";
-    if (title.trim().length < 2) next.title = "Enter a merchant or description.";
+    if (title.trim().length < 2) next.title = type === "income" ? "Enter a description." : "Enter a merchant.";
     if (!category) next.category = "Choose a category.";
     if (!account) next.account = "Choose an account.";
     if (!date) next.date = "Pick a date.";
@@ -253,6 +272,7 @@ export default function TransactionDrawer({ mode, onClose, onToast }: Props) {
     }
 
     setSaving(true);
+    let uploadedReceiptId: string | undefined;
     try {
       let savedReceipt = receipt;
       if (receiptFile.current) {
@@ -264,8 +284,12 @@ export default function TransactionDrawer({ mode, onClose, onToast }: Props) {
           throw new Error(result?.error || "Could not upload the receipt. Please try again.");
         }
         savedReceipt = result;
+        uploadedReceiptId = result.id;
       }
 
+      const scanStatus = scanWasUsed && !existing
+        ? confirmScannedReceipt ? "confirmed" as const : "needs_review" as const
+        : undefined;
       const fields = {
         type,
         title: title.trim(),
@@ -275,15 +299,22 @@ export default function TransactionDrawer({ mode, onClose, onToast }: Props) {
         category: (type === "income" ? "income" : category) as TransactionCategory,
         account: account as AccountId,
         receipt: savedReceipt,
-        ...(scanWasUsed && !existing ? { status: "needs_review" as const } : {}),
+        ...(scanStatus ? { status: scanStatus } : {}),
       };
       if (existing) {
-        updateTransaction(existing.id, { ...fields, status: "confirmed" });
+        await updateTransaction(existing.id, { ...fields, status: "confirmed" });
         onToast(draft ? `Receipt confirmed · ${formatVnd(value)} posted` : "Changes saved");
       } else {
-        addTransaction(fields);
-        onToast(`${type === "income" ? "Income" : "Expense"} of ${formatVnd(value)} added`);
+        await addTransaction(fields);
+        onToast(
+          scanWasUsed
+            ? confirmScannedReceipt
+              ? `Receipt confirmed · ${formatVnd(value)} posted`
+              : `Receipt saved as a review draft · ${formatVnd(value)}`
+            : `${type === "income" ? "Income" : "Expense"} of ${formatVnd(value)} added`,
+        );
       }
+      uploadedReceiptId = undefined;
 
       receiptFile.current = null;
       let cleanupFailed = false;
@@ -299,35 +330,52 @@ export default function TransactionDrawer({ mode, onClose, onToast }: Props) {
       if (cleanupFailed) onToast("Saved, but the replaced receipt could not be removed from server storage.");
       onClose();
     } catch (error) {
-      setReceiptError(error instanceof Error ? error.message : "Could not save this transaction.");
+      let cleanupFailed = false;
+      if (uploadedReceiptId) {
+        try {
+          const response = await fetch(`/api/receipts/${encodeURIComponent(uploadedReceiptId)}`, { method: "DELETE" });
+          cleanupFailed = !response.ok;
+        } catch (cleanupError) {
+          console.error("Could not remove a receipt uploaded for an unsaved transaction:", cleanupError);
+          cleanupFailed = true;
+        }
+      }
+      const message = error instanceof Error ? error.message : "Could not save this transaction.";
+      setSaveError(cleanupFailed ? `${message} The uploaded receipt could not be removed from server storage.` : message);
       setSaving(false);
     }
   }
 
   async function onDelete() {
     if (!existing) return;
-    if (existing.receipt?.id) {
-      setSaving(true);
-      try {
-        const response = await fetch(`/api/receipts/${encodeURIComponent(existing.receipt.id)}`, { method: "DELETE" });
-        if (!response.ok) {
-          const result = (await response.json().catch(() => null)) as { error?: string } | null;
-          throw new Error(result?.error || "Could not remove the saved receipt.");
+    setSaveError(null);
+    setSaving(true);
+    try {
+      await deleteTransaction(existing.id);
+      let cleanupFailed = false;
+      if (existing.receipt?.id) {
+        try {
+          const response = await fetch(`/api/receipts/${encodeURIComponent(existing.receipt.id)}`, { method: "DELETE" });
+          cleanupFailed = !response.ok;
+        } catch (error) {
+          console.error("Could not remove the deleted transaction's receipt:", error);
+          cleanupFailed = true;
         }
-      } catch (error) {
-        setReceiptError(error instanceof Error ? error.message : "Could not remove the saved receipt.");
-        setSaving(false);
-        return;
       }
+      onToast(cleanupFailed ? "Transaction deleted, but its receipt could not be removed from server storage." : "Transaction deleted");
+      onClose();
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : "Could not delete this transaction.");
+      setSaving(false);
     }
-    deleteTransaction(existing.id);
-    onToast("Transaction deleted");
-    onClose();
   }
 
   const heading = editing ? "Edit transaction" : "Add transaction";
+  const titleLabel = type === "income" ? "Description" : "Merchant";
+  const titlePlaceholder = type === "income" ? "Enter income description" : "Enter merchant name";
   const submitLabel = editing ? (draft ? "Confirm transaction" : "Save changes") : scanWasUsed ? "Save review draft" : "Add transaction";
   const attachedLabel = receipt ? `Receipt selected · 1 ${receipt.kind === "pdf" ? "PDF" : "image"}${receipt.size ? ` · ${formatBytes(receipt.size)}` : ""}` : "";
+  const accountOptions = accounts.filter((entry) => !entry.archived || entry.id === account);
 
   return (
     <div className="fixed inset-0 z-[60]">
@@ -383,9 +431,10 @@ export default function TransactionDrawer({ mode, onClose, onToast }: Props) {
           )}
           {scanWasUsed && !existing && (
             <Alert tone="info">
-              Check the suggested fields against the receipt. Saving creates a review draft that stays out of your totals until you confirm it.
+              Review the suggested fields. Save as a draft, or confirm to post this transaction to your totals.
             </Alert>
           )}
+          {saveError && <Alert tone="error">{saveError}</Alert>}
 
           <div role="radiogroup" aria-label="Type" className="grid grid-cols-2 gap-2">
             {(["expense", "income"] as const).map((t) => (
@@ -418,13 +467,13 @@ export default function TransactionDrawer({ mode, onClose, onToast }: Props) {
                   clearError("amount");
                 }}
                 aria-invalid={!!errors.amount}
-                className={`${inputCls} pr-8 text-base font-semibold tabular-nums ${errors.amount ? "border-red-400" : "border-ink-200"}`}
+                className={`${inputCls} pr-12 text-base font-semibold tabular-nums ${errors.amount ? "border-red-400" : "border-ink-200"}`}
               />
-              <span className="pointer-events-none absolute inset-y-0 right-3.5 flex items-center text-sm text-ink-500">đ</span>
+              <span className="pointer-events-none absolute inset-y-0 right-3.5 flex items-center text-sm text-ink-500">VND</span>
             </div>
           </Labeled>
 
-          <Labeled label="Merchant / description" htmlFor={`${uid}-title`} error={errors.title}>
+          <Labeled label={titleLabel} htmlFor={`${uid}-title`} error={errors.title}>
             <input
               id={`${uid}-title`}
               value={title}
@@ -433,7 +482,7 @@ export default function TransactionDrawer({ mode, onClose, onToast }: Props) {
                 setTitle(e.target.value);
                 clearError("title");
               }}
-              placeholder="Enter merchant or description"
+              placeholder={titlePlaceholder}
               aria-invalid={!!errors.title}
               className={`${inputCls} ${errors.title ? "border-red-400" : "border-ink-200"}`}
             />
@@ -486,14 +535,19 @@ export default function TransactionDrawer({ mode, onClose, onToast }: Props) {
                 <option value="" disabled>
                   Select account
                 </option>
-                {ACCOUNTS.map((a) => (
-                  <option key={a.id} value={a.id} className="text-ink-900">
-                    {a.name}
+                {accountOptions.map((entry) => (
+                  <option key={entry.id} value={entry.id} className="text-ink-900">
+                    {entry.name}{entry.archived ? " (archived)" : ""}
                   </option>
                 ))}
               </select>
               <ChevronDownIcon className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-ink-500" />
             </div>
+            {accounts.every((entry) => entry.archived) && (
+              <p className="mt-1.5 text-xs text-ink-500">
+                No active accounts. <Link href="/accounts" onClick={onClose} className="font-medium text-accent-700 hover:underline">Create or restore one</Link>.
+              </p>
+            )}
           </Labeled>
 
           <Labeled label="Date" htmlFor={`${uid}-date`} error={errors.date}>
@@ -528,6 +582,7 @@ export default function TransactionDrawer({ mode, onClose, onToast }: Props) {
               ref={fileRef}
               type="file"
               accept=".jpg,.jpeg,.png,.pdf,image/jpeg,image/png,application/pdf"
+              capture="environment"
               className="hidden"
               onChange={onFile}
               disabled={scanning}
@@ -654,14 +709,37 @@ export default function TransactionDrawer({ mode, onClose, onToast }: Props) {
         </div>
 
         <footer className="space-y-2 border-t border-ink-200 bg-white px-6 py-3.5">
-          <button
-            type="submit"
-            disabled={saving || scanning}
-            className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-xl bg-accent-600 text-sm font-semibold text-white transition hover:bg-accent-700 focus:outline-none focus-visible:ring-4 focus-visible:ring-accent-200 disabled:bg-accent-400"
-          >
-            {saving && <SpinnerIcon />}
-            {saving ? "Saving…" : submitLabel}
-          </button>
+          {scanWasUsed && !existing ? (
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="submit"
+                onClick={() => { scanSaveIntent.current = "draft"; }}
+                disabled={saving || scanning}
+                className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-ink-200 bg-white text-sm font-semibold text-ink-700 transition hover:bg-ink-50 focus:outline-none focus-visible:ring-4 focus-visible:ring-accent-200 disabled:opacity-50"
+              >
+                {saving && <SpinnerIcon />}
+                {saving ? "Saving…" : "Save draft"}
+              </button>
+              <button
+                type="submit"
+                onClick={() => { scanSaveIntent.current = "confirm"; }}
+                disabled={saving || scanning}
+                className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-accent-600 text-sm font-semibold text-white transition hover:bg-accent-700 focus:outline-none focus-visible:ring-4 focus-visible:ring-accent-200 disabled:bg-accent-400"
+              >
+                {saving && <SpinnerIcon />}
+                {saving ? "Saving…" : "Confirm review"}
+              </button>
+            </div>
+          ) : (
+            <button
+              type="submit"
+              disabled={saving || scanning}
+              className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-xl bg-accent-600 text-sm font-semibold text-white transition hover:bg-accent-700 focus:outline-none focus-visible:ring-4 focus-visible:ring-accent-200 disabled:bg-accent-400"
+            >
+              {saving && <SpinnerIcon />}
+              {saving ? "Saving…" : submitLabel}
+            </button>
+          )}
           <button
             type="button"
             onClick={onClose}

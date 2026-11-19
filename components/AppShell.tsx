@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { createContext, startTransition, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, startTransition, useCallback, useContext, useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from "react";
 import { getSession, signOut, type Session } from "@/lib/auth";
 import { summarize, type Summary } from "@/lib/finance";
 import { useTransactions } from "@/lib/store";
@@ -15,13 +15,27 @@ import { CheckIcon } from "./icons";
 
 export default function AppShell({ children }: { children: ReactNode }) {
   const router = useRouter();
-  const { transactions, ready, now } = useTransactions();
+  const {
+    transactions,
+    accounts,
+    ready,
+    now,
+    error: transactionsError,
+    migration,
+    migrationError,
+    migrationBusy,
+    importLocalTransactions,
+    skipLocalImport,
+    reload,
+  } = useTransactions();
   const [session, setSession] = useState<Session | null>(null);
   const [sessionError, setSessionError] = useState<string | null>(null);
   const [navOpen, setNavOpen] = useState(false);
   const [drawer, setDrawer] = useState<DrawerMode | null>(null);
+  const [initialReceiptFile, setInitialReceiptFile] = useState<File | null>(null);
   const [advisorOpen, setAdvisorOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const scanInputRef = useRef<HTMLInputElement>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -60,11 +74,26 @@ export default function AppShell({ children }: { children: ReactNode }) {
     toastTimer.current = setTimeout(() => setToast(null), 3500);
   }, []);
 
-  const summary = useMemo(() => summarize(transactions, now), [transactions, now]);
+  const summary = useMemo(() => summarize(transactions, now, accounts), [transactions, now, accounts]);
   const firstName = session?.name.trim().split(/\s+/)[0] || "there";
-  const openAdd = useCallback(() => setDrawer({ kind: "add" }), []);
+  const openAdd = useCallback(() => {
+    setInitialReceiptFile(null);
+    setDrawer({ kind: "add" });
+  }, []);
+  const openScanReceipt = useCallback(() => scanInputRef.current?.click(), []);
   const openEdit = useCallback((id: string) => setDrawer({ kind: "edit", id }), []);
-  const shell = useMemo(() => ({ summary, firstName, openAdd, openEdit, showToast }), [summary, firstName, openAdd, openEdit, showToast]);
+  const shell = useMemo(
+    () => ({ summary, firstName, openAdd, openEdit, openScanReceipt, showToast }),
+    [summary, firstName, openAdd, openEdit, openScanReceipt, showToast],
+  );
+
+  function onScanFile(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    setInitialReceiptFile(file);
+    setDrawer({ kind: "add" });
+  }
 
   if (sessionError) {
     return (
@@ -78,6 +107,21 @@ export default function AppShell({ children }: { children: ReactNode }) {
     return <div className="min-h-screen bg-ink-100" aria-busy="true" />;
   }
 
+  if (transactionsError) {
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center gap-3 bg-ink-100 px-6 text-center">
+        <p role="alert" className="max-w-lg text-sm text-red-700">{transactionsError}</p>
+        <button
+          type="button"
+          onClick={reload}
+          className="rounded-xl border border-ink-200 bg-white px-4 py-2 text-sm font-semibold text-ink-700 hover:bg-ink-50 focus:outline-none focus-visible:ring-4 focus-visible:ring-accent-200"
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-screen overflow-hidden bg-ink-100/60">
       {/* Sidebar: static on desktop, slide-over on mobile */}
@@ -87,7 +131,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
           navOpen ? "translate-x-0" : "-translate-x-full"
         }`}
       >
-        <Sidebar onNavigate={() => setNavOpen(false)} onOpenAdvisor={() => setAdvisorOpen(true)} />
+        <Sidebar onNavigate={() => setNavOpen(false)} onOpenAdvisor={() => setAdvisorOpen(true)} onScanReceipt={openScanReceipt} />
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
@@ -129,13 +173,27 @@ export default function AppShell({ children }: { children: ReactNode }) {
         </main>
       </div>
 
+      <input
+        ref={scanInputRef}
+        type="file"
+        accept="image/jpeg,image/png"
+        capture="environment"
+        className="hidden"
+        aria-label="Choose or take a receipt photo"
+        onChange={onScanFile}
+      />
+
       <AdvisorChat open={advisorOpen} onOpenChange={setAdvisorOpen} summary={summary} now={now} firstName={firstName} />
 
       {drawer && (
         <TransactionDrawer
           key={drawer.kind === "edit" ? drawer.id : "add"}
           mode={drawer}
-          onClose={() => setDrawer(null)}
+          initialReceiptFile={initialReceiptFile}
+          onClose={() => {
+            setDrawer(null);
+            setInitialReceiptFile(null);
+          }}
           onToast={showToast}
         />
       )}
@@ -149,6 +207,50 @@ export default function AppShell({ children }: { children: ReactNode }) {
           {toast}
         </div>
       )}
+      {!migration && migrationError && (
+        <div role="alert" className="fixed bottom-6 left-1/2 z-70 -translate-x-1/2 rounded-xl border border-red-200 bg-white px-4 py-3 text-sm text-red-700 shadow-lg">
+          Could not read the old browser transactions: {migrationError}
+        </div>
+      )}
+
+      {migration && (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-ink-900/40 px-4" role="presentation">
+          <section
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="transaction-import-title"
+            aria-describedby="transaction-import-description"
+            className="w-full max-w-md rounded-2xl border border-ink-200 bg-white p-6 shadow-xl"
+          >
+            <h2 id="transaction-import-title" className="text-lg font-semibold text-ink-900">
+              Import browser transactions?
+            </h2>
+            <p id="transaction-import-description" className="mt-2 text-sm leading-6 text-ink-600">
+              {migration.transactions.length} saved transaction{migration.transactions.length === 1 ? "" : "s"} were found on this browser.
+              They aren&apos;t linked to an account. Importing will add them to the account you&apos;re currently signed into. Demo rows are excluded; attached receipt files aren&apos;t copied.
+            </p>
+            {migrationError && <p role="alert" className="mt-3 text-sm text-red-700">{migrationError}</p>}
+            <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                onClick={skipLocalImport}
+                disabled={migrationBusy}
+                className="h-10 rounded-xl border border-ink-200 px-4 text-sm font-semibold text-ink-700 hover:bg-ink-50 focus:outline-none focus-visible:ring-4 focus-visible:ring-accent-200 disabled:opacity-50"
+              >
+                Skip for this account
+              </button>
+              <button
+                type="button"
+                onClick={() => void importLocalTransactions().catch(() => undefined)}
+                disabled={migrationBusy}
+                className="h-10 rounded-xl bg-accent-600 px-4 text-sm font-semibold text-white hover:bg-accent-700 focus:outline-none focus-visible:ring-4 focus-visible:ring-accent-200 disabled:opacity-50"
+              >
+                {migrationBusy ? "Importing…" : "Import transactions"}
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
     </div>
   );
 }
@@ -158,6 +260,8 @@ type ShellValue = {
   firstName: string;
   /** Open the add-transaction drawer. */
   openAdd: () => void;
+  /** Open the platform file picker or mobile camera for a receipt photo. */
+  openScanReceipt: () => void;
   /** Open the edit drawer for a transaction id. */
   openEdit: (id: string) => void;
   showToast: (message: string) => void;

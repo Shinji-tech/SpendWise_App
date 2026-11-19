@@ -16,12 +16,15 @@ import {
   TransactionsIcon,
 } from "./app-icons";
 
-type Item = { label: string; icon: ComponentType<{ className?: string }> } & ({ href: string } | { action: "advisor" });
+type Item = { label: string; icon: ComponentType<{ className?: string }> } & (
+  | { href: string }
+  | { action: "advisor" | "scanReceipt" }
+);
 
 export const NAV: Item[] = [
   { label: "Dashboard", href: "/dashboard", icon: DashboardIcon },
   { label: "Transactions", href: "/transactions", icon: TransactionsIcon },
-  { label: "Scan receipt", href: "/scan-receipt", icon: ScanIcon },
+  { label: "Scan receipt", action: "scanReceipt", icon: ScanIcon },
   { label: "Budgets", href: "/budgets", icon: BudgetsIcon },
   { label: "Goals", href: "/goals", icon: GoalsIcon },
   { label: "Analytics", href: "/analytics", icon: AnalyticsIcon },
@@ -35,7 +38,15 @@ const itemCls = (active: boolean) =>
     active ? "bg-accent-50 text-accent-700" : "text-ink-700 hover:bg-ink-100"
   }`;
 
-export default function Sidebar({ onNavigate, onOpenAdvisor }: { onNavigate: () => void; onOpenAdvisor: () => void }) {
+export default function Sidebar({
+  onNavigate,
+  onOpenAdvisor,
+  onScanReceipt,
+}: {
+  onNavigate: () => void;
+  onOpenAdvisor: () => void;
+  onScanReceipt: () => void;
+}) {
   const pathname = usePathname();
 
   return (
@@ -57,7 +68,8 @@ export default function Sidebar({ onNavigate, onOpenAdvisor }: { onNavigate: () 
                 type="button"
                 onClick={() => {
                   onNavigate();
-                  onOpenAdvisor();
+                  if (item.action === "advisor") onOpenAdvisor();
+                  else onScanReceipt();
                 }}
                 className={itemCls(false)}
               >
