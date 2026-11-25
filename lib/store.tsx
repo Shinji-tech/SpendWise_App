@@ -3,7 +3,9 @@
 import { createContext, startTransition, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   EXPENSE_CATEGORIES,
+  type BudgetLimit,
   type FinancialAccount,
+  type Goal,
   type Receipt,
   type Transaction,
 } from "./data";
@@ -21,8 +23,11 @@ export type FinancialAccountPatch = Pick<FinancialAccount, "name" | "type" | "op
 
 type Migration = { userId: string; transactions: Transaction[] };
 type Store = {
+  userId: string | null;
   transactions: Transaction[];
   accounts: FinancialAccount[];
+  budgets: BudgetLimit[];
+  goals: Goal[];
   ready: boolean;
   now: Date;
   error: string | null;
@@ -37,6 +42,10 @@ type Store = {
   deleteTransaction: (id: string) => Promise<void>;
   addAccount: (input: NewFinancialAccount) => Promise<FinancialAccount>;
   updateAccount: (id: string, patch: FinancialAccountPatch) => Promise<void>;
+  saveBudget: (category: string, limit: number) => Promise<void>;
+  addGoal: (input: Omit<Goal, "id">) => Promise<void>;
+  updateGoal: (id: string, input: Omit<Goal, "id">) => Promise<void>;
+  deleteGoal: (id: string) => Promise<void>;
 };
 
 const Ctx = createContext<Store | null>(null);
@@ -71,6 +80,33 @@ function isFinancialAccount(value: unknown): value is FinancialAccount {
     typeof value.archived === "boolean" &&
     typeof value.createdAt === "number" &&
     Number.isSafeInteger(value.createdAt)
+  );
+}
+
+function isBudgetLimit(value: unknown): value is BudgetLimit {
+  return (
+    isRecord(value) &&
+    typeof value.category === "string" &&
+    EXPENSE_CATEGORIES.includes(value.category as (typeof EXPENSE_CATEGORIES)[number]) &&
+    typeof value.limit === "number" &&
+    Number.isSafeInteger(value.limit) &&
+    value.limit >= 0
+  );
+}
+
+function isGoal(value: unknown): value is Goal {
+  return (
+    isRecord(value) &&
+    typeof value.id === "string" &&
+    typeof value.name === "string" &&
+    typeof value.saved === "number" &&
+    Number.isSafeInteger(value.saved) &&
+    value.saved >= 0 &&
+    typeof value.target === "number" &&
+    Number.isSafeInteger(value.target) &&
+    value.target > 0 &&
+    typeof value.due === "string" &&
+    /^\d{4}-\d{2}-\d{2}$/.test(value.due)
   );
 }
 
@@ -158,8 +194,11 @@ function newId() {
 }
 
 export function TransactionsProvider({ children }: { children: ReactNode }) {
+  const [userId, setUserId] = useState<string | null>(null);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [accounts, setAccounts] = useState<FinancialAccount[]>([]);
+  const [budgets, setBudgets] = useState<BudgetLimit[]>([]);
+  const [goals, setGoals] = useState<Goal[]>([]);
   const [ready, setReady] = useState(false);
   const [now, setNow] = useState(() => new Date(0));
   const [error, setError] = useState<string | null>(null);
@@ -174,11 +213,19 @@ export function TransactionsProvider({ children }: { children: ReactNode }) {
     Promise.all([
       request<{ userId: string; transactions: Transaction[] }>("/api/transactions"),
       request<{ accounts: FinancialAccount[] }>("/api/accounts"),
+      request<{ budgets: BudgetLimit[] }>("/api/budgets"),
+      request<{ goals: Goal[] }>("/api/goals"),
     ])
-      .then(([{ userId, transactions: remoteTransactions }, { accounts: remoteAccounts }]) => {
+      .then(([{ userId, transactions: remoteTransactions }, { accounts: remoteAccounts }, { budgets: remoteBudgets }, { goals: remoteGoals }]) => {
         if (!active) return;
         if (!Array.isArray(remoteAccounts) || !remoteAccounts.every(isFinancialAccount)) {
           throw new Error("The server returned invalid account data.");
+        }
+        if (!Array.isArray(remoteBudgets) || !remoteBudgets.every(isBudgetLimit)) {
+          throw new Error("The server returned invalid budget data.");
+        }
+        if (!Array.isArray(remoteGoals) || !remoteGoals.every(isGoal)) {
+          throw new Error("The server returned invalid goal data.");
         }
         const current = new Date();
         const migrationKey = `${MIGRATION_PREFIX}${userId}`;
@@ -194,8 +241,11 @@ export function TransactionsProvider({ children }: { children: ReactNode }) {
         const remoteIds = new Set(remoteTransactions.map((transaction) => transaction.id));
         const candidates = localTransactions.filter((transaction) => !remoteIds.has(transaction.id));
         startTransition(() => {
+          setUserId(userId);
           setTransactions(remoteTransactions);
           setAccounts(remoteAccounts);
+          setBudgets(remoteBudgets);
+          setGoals(remoteGoals);
           setNow(current);
           setMigration(candidates.length ? { userId, transactions: candidates } : null);
           setReady(true);
@@ -203,6 +253,7 @@ export function TransactionsProvider({ children }: { children: ReactNode }) {
       })
       .catch((cause: unknown) => {
         if (!active) return;
+        setUserId(null);
         setError(cause instanceof Error ? cause.message : "Could not load your transactions.");
         setReady(true);
       });
@@ -215,7 +266,10 @@ export function TransactionsProvider({ children }: { children: ReactNode }) {
   const reload = useCallback(() => {
     setReady(false);
     setError(null);
+    setUserId(null);
     setAccounts([]);
+    setBudgets([]);
+    setGoals([]);
     setMigration(null);
     setMigrationError(null);
     setReloadKey((key) => key + 1);
@@ -319,10 +373,45 @@ export function TransactionsProvider({ children }: { children: ReactNode }) {
     setAccounts((current) => current.map((account) => (account.id === id ? result.account : account)));
   }, []);
 
+  const saveBudget = useCallback(async (category: string, limit: number) => {
+    const result = await request<{ budget: BudgetLimit }>("/api/budgets", {
+      method: "PUT",
+      body: JSON.stringify({ category, limit }),
+    });
+    setBudgets((current) => {
+      const updated = current.filter((budget) => budget.category !== result.budget.category);
+      return [...updated, result.budget];
+    });
+  }, []);
+
+  const addGoal = useCallback(async (input: Omit<Goal, "id">) => {
+    const result = await request<{ goal: Goal }>("/api/goals", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+    setGoals((current) => [...current, result.goal]);
+  }, []);
+
+  const updateGoal = useCallback(async (id: string, input: Omit<Goal, "id">) => {
+    const result = await request<{ goal: Goal }>(`/api/goals/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify(input),
+    });
+    setGoals((current) => current.map((goal) => (goal.id === id ? result.goal : goal)));
+  }, []);
+
+  const deleteGoal = useCallback(async (id: string) => {
+    await request<void>(`/api/goals/${encodeURIComponent(id)}`, { method: "DELETE" });
+    setGoals((current) => current.filter((goal) => goal.id !== id));
+  }, []);
+
   const value = useMemo(
     () => ({
+      userId,
       transactions,
       accounts,
+      budgets,
+      goals,
       ready,
       now,
       error,
@@ -337,10 +426,17 @@ export function TransactionsProvider({ children }: { children: ReactNode }) {
       deleteTransaction,
       addAccount,
       updateAccount,
+      saveBudget,
+      addGoal,
+      updateGoal,
+      deleteGoal,
     }),
     [
+      userId,
       transactions,
       accounts,
+      budgets,
+      goals,
       ready,
       now,
       error,
@@ -355,6 +451,10 @@ export function TransactionsProvider({ children }: { children: ReactNode }) {
       deleteTransaction,
       addAccount,
       updateAccount,
+      saveBudget,
+      addGoal,
+      updateGoal,
+      deleteGoal,
     ],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

@@ -5,15 +5,13 @@ import { useEffect, useState, type SubmitEvent } from "react";
 import Alert from "@/components/Alert";
 import AuthCard from "@/components/AuthCard";
 import Button from "@/components/Button";
-import Divider from "@/components/Divider";
 import Field from "@/components/Field";
-import GoogleButton from "@/components/GoogleButton";
 import { MailIcon } from "@/components/icons";
-import { requestPasswordReset } from "@/lib/auth";
+import { AuthError, requestPasswordReset } from "@/lib/auth";
 import { useShake } from "@/lib/useShake";
 import { validateEmail } from "@/lib/validators";
 
-const RESEND_SECONDS = 30;
+const RESEND_SECONDS = 60;
 
 export default function ForgotPasswordPage() {
   const [email, setEmail] = useState("");
@@ -40,8 +38,8 @@ export default function ForgotPasswordPage() {
       await requestPasswordReset(email.trim());
       setSent(true);
       setCooldown(RESEND_SECONDS);
-    } catch {
-      setFormError("We couldn't send the link. Please try again.");
+    } catch (error) {
+      setFormError(error instanceof AuthError ? error.message : "We couldn't send the link. Please try again.");
       shake();
     } finally {
       setLoading(false);
@@ -70,7 +68,7 @@ export default function ForgotPasswordPage() {
           <span className="flex h-12 w-12 items-center justify-center rounded-full bg-white text-brand-600 shadow-sm">
             <MailIcon />
           </span>
-          <p className="mt-3 text-sm text-ink-500">We sent a link to</p>
+          <p className="mt-3 text-sm text-ink-500">If an account exists, reset instructions will be sent to</p>
           <p className="break-all text-[15px] font-semibold text-ink-900">{email.trim()}</p>
         </div>
 
@@ -125,12 +123,6 @@ export default function ForgotPasswordPage() {
           {loading ? "Sending…" : "Send reset link"}
         </Button>
       </form>
-
-      <div className="my-5">
-        <Divider />
-      </div>
-
-      <GoogleButton />
 
       <p className="mt-6 text-center text-sm">
         <Link href="/sign-in" className="font-semibold text-brand-700 hover:text-brand-800 hover:underline">

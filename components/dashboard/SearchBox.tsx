@@ -7,8 +7,8 @@ import { useTransactions } from "@/lib/store";
 import { CloseIcon, SearchIcon } from "../app-icons";
 import { CategoryIcon } from "./categoryIcon";
 
-/** Live search across the user's transactions (title, note, category, amount). */
-export default function SearchBox() {
+/** Live search across the user's transactions and attached receipt names. */
+export default function SearchBox({ onOpenTransaction }: { onOpenTransaction: (id: string) => void }) {
   const { transactions } = useTransactions();
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
@@ -19,8 +19,8 @@ export default function SearchBox() {
   const results = useMemo(() => {
     if (!q) return [];
     return transactions
-      .filter((t) => t.status === "confirmed")
-      .filter((t) => `${t.title} ${t.note} ${CATEGORY_LABEL[t.category]} ${t.amount}`.toLowerCase().includes(q))
+      .filter((t) => t.status === "confirmed" || t.receipt)
+      .filter((t) => `${t.title} ${t.note} ${CATEGORY_LABEL[t.category]} ${t.amount} ${t.receipt?.name ?? ""}`.toLowerCase().includes(q))
       .sort((a, b) => (a.date < b.date ? 1 : -1));
   }, [q, transactions]);
 
@@ -60,8 +60,8 @@ export default function SearchBox() {
             inputRef.current?.blur();
           }
         }}
-        placeholder="Search transactions and receipts"
-        aria-label="Search transactions and receipts"
+        placeholder="Search transactions or receipt names"
+        aria-label="Search transactions or receipt names"
         className="h-10 w-full appearance-none rounded-xl border border-ink-200 bg-white pl-9 pr-9 text-sm outline-none transition placeholder:text-ink-400 hover:border-ink-400 focus:border-accent-500 focus:ring-4 focus:ring-accent-100 [&::-webkit-search-cancel-button]:hidden"
       />
       {query && (
@@ -89,19 +89,29 @@ export default function SearchBox() {
               </p>
               <ul role="list">
                 {results.slice(0, 6).map((t) => (
-                  <li key={t.id} className="flex items-center gap-3 rounded-lg px-2.5 py-2 hover:bg-ink-100/60">
+                  <li key={t.id}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onOpenTransaction(t.id);
+                        setOpen(false);
+                        setQuery("");
+                      }}
+                      className="flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left hover:bg-ink-100/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-400"
+                    >
                     <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent-50 text-accent-600">
                       <CategoryIcon category={t.category} className="h-4 w-4" />
                     </span>
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-sm font-medium text-ink-900">{t.title}</p>
                       <p className="truncate text-xs text-ink-500">
-                        {formatDate(t.date)} · {CATEGORY_LABEL[t.category]}
+                        {formatDate(t.date)} · {t.receipt?.name ?? CATEGORY_LABEL[t.category]}
                       </p>
                     </div>
                     <span className={`text-sm font-semibold tabular-nums ${t.type === "expense" ? "text-red-600" : "text-emerald-600"}`}>
                       {formatSignedVnd(t.type === "expense" ? -t.amount : t.amount)}
                     </span>
+                    </button>
                   </li>
                 ))}
               </ul>

@@ -137,10 +137,14 @@ export default function TransactionDrawer({ mode, initialReceiptFile, onClose, o
         result.fields.date && "date",
         result.fields.category && "category",
       ].filter(Boolean);
+      const engineMessage =
+        result.engine === "paddleocr-phobert"
+          ? "Scanned with local PaddleOCR and PhoBERT."
+          : `Local AI unavailable; used browser Tesseract OCR instead. ${result.fallbackReason ?? ""}`.trim();
       setScanMessage(
         found.length
-          ? `Suggested ${found.join(", ")}. Review every field before saving.`
-          : "The receipt was read, but no transaction fields were recognized. Enter the details manually before saving.",
+          ? `${engineMessage} Suggested ${found.join(", ")}. Review every field before saving.`
+          : `${engineMessage} No transaction fields were recognized. Enter the details manually before saving.`,
       );
     } catch (error) {
       setScanWasUsed(true);

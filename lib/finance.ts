@@ -1,4 +1,4 @@
-import { BUDGETS, type CategoryId, type FinancialAccount, type Transaction } from "./data";
+import { type BudgetLimit, type CategoryId, type FinancialAccount, type Transaction } from "./data";
 import { percent, toISODate } from "./format";
 
 export type CategorySpend = { category: CategoryId; amount: number; share: number };
@@ -44,7 +44,12 @@ const SHORT_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "S
 
 const sum = (list: Transaction[]) => list.reduce((acc, t) => acc + t.amount, 0);
 
-export function summarize(all: Transaction[], now: Date, accounts: FinancialAccount[]): Summary {
+export function summarize(
+  all: Transaction[],
+  now: Date,
+  accounts: FinancialAccount[],
+  budgetLimits: BudgetLimit[] = [],
+): Summary {
   const confirmed = all.filter((t) => t.status === "confirmed");
   const today = toISODate(now);
   const curKey = today.slice(0, 7);
@@ -76,11 +81,12 @@ export function summarize(all: Transaction[], now: Date, accounts: FinancialAcco
     .map(([category, amount]) => ({ category, amount, share: percent(amount, expenses) }))
     .sort((a, b) => b.amount - a.amount);
 
-  const budgets: BudgetStatus[] = BUDGETS.map(({ category, limit }) => {
+  const budgets: BudgetStatus[] = budgetLimits.map(({ category, limit }) => {
     const spent = spentBy.get(category) ?? 0;
-    return { category, spent, limit, ratio: spent / limit, over: Math.max(0, spent - limit) };
+    const ratio = limit > 0 ? spent / limit : spent > 0 ? Number.POSITIVE_INFINITY : 0;
+    return { category, spent, limit, ratio, over: Math.max(0, spent - limit) };
   });
-  const totalLimit = BUDGETS.reduce((acc, b) => acc + b.limit, 0);
+  const totalLimit = budgetLimits.reduce((acc, b) => acc + b.limit, 0);
   const budgetedSpend = budgets.reduce((acc, b) => acc + b.spent, 0);
 
   const recent = [...confirmed]
@@ -103,7 +109,7 @@ export function summarize(all: Transaction[], now: Date, accounts: FinancialAcco
     totalLimit,
     budgetedSpend,
     budgetRemaining: totalLimit - budgetedSpend,
-    budgetUsedPct: percent(budgetedSpend, totalLimit),
+    budgetUsedPct: totalLimit > 0 ? percent(budgetedSpend, totalLimit) : budgetedSpend > 0 ? 100 : 0,
     prevIncome,
     prevExpenses,
     prevMonthLabel: `${SHORT_MONTHS[prevDate.getMonth()]} ${prevDate.getFullYear()}`,

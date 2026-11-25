@@ -1,22 +1,24 @@
 "use client";
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { answerQuestion, SUGGESTIONS } from "@/lib/advisor";
-import type { Summary } from "@/lib/finance";
+import { SUGGESTIONS } from "@/lib/advisor";
 import { CloseIcon, SendIcon, SparkleIcon } from "../app-icons";
 
 type Message = { id: number; role: "user" | "advisor"; text: string };
+type AdvisorMode = "llm" | "offline";
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
 type Props = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  summary: Summary;
-  now: Date;
   firstName: string;
 };
 
 /** Floating advisor: round bubble bottom-right that opens a small chat panel. */
-export default function AdvisorChat({ open, onOpenChange, summary, now, firstName }: Props) {
+export default function AdvisorChat({ open, onOpenChange, firstName }: Props) {
   const [messages, setMessages] = useState<Message[]>(() => [
     {
       id: 0,
@@ -30,11 +32,7 @@ export default function AdvisorChat({ open, onOpenChange, summary, now, firstNam
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const bubbleRef = useRef<HTMLButtonElement>(null);
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => () => {
-    if (timer.current) clearTimeout(timer.current);
-  }, []);
+  const [mode, setMode] = useState<AdvisorMode | null>(null);
 
   useEffect(() => {
     if (open) inputRef.current?.focus();
@@ -56,21 +54,51 @@ export default function AdvisorChat({ open, onOpenChange, summary, now, firstNam
     return () => window.removeEventListener("keydown", onKey);
   }, [open, onOpenChange]);
 
-  function ask(text: string) {
+  async function ask(text: string) {
     const question = text.trim();
     if (!question || typing) return;
     setMessages((m) => [...m, { id: nextId.current++, role: "user", text: question }]);
     setDraft("");
     setTyping(true);
-    timer.current = setTimeout(() => {
-      setMessages((m) => [...m, { id: nextId.current++, role: "advisor", text: answerQuestion(question, summary, now) }]);
+    const history = messages
+      .slice(1)
+      .slice(-8)
+      .map((message) => ({ role: message.role === "user" ? "user" : "assistant", content: message.text }));
+
+    try {
+      const currentDate = new Date();
+      const today = [
+        currentDate.getFullYear(),
+        String(currentDate.getMonth() + 1).padStart(2, "0"),
+        String(currentDate.getDate()).padStart(2, "0"),
+      ].join("-");
+      const response = await fetch("/api/advisor", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        cache: "no-store",
+        body: JSON.stringify({ question, history, today }),
+      });
+      const body: unknown = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(isRecord(body) && typeof body.error === "string" ? body.error : "The advisor is unavailable.");
+      }
+      if (!isRecord(body) || typeof body.answer !== "string" || (body.mode !== "llm" && body.mode !== "offline")) {
+        throw new Error("The advisor returned an invalid response.");
+      }
+      const answer = body.answer;
+      setMode(body.mode);
+      setMessages((current) => [...current, { id: nextId.current++, role: "advisor", text: answer }]);
+    } catch (cause) {
+      const error = cause instanceof Error ? cause.message : "The advisor is unavailable right now. Please try again.";
+      setMessages((current) => [...current, { id: nextId.current++, role: "advisor", text: error }]);
+    } finally {
       setTyping(false);
-    }, 650);
+    }
   }
 
   function onSubmit(e: FormEvent) {
     e.preventDefault();
-    ask(draft);
+    void ask(draft);
   }
 
   const onlyGreeting = messages.length === 1;
@@ -89,7 +117,11 @@ export default function AdvisorChat({ open, onOpenChange, summary, now, firstNam
             </span>
             <div className="min-w-0 flex-1">
               <p className="text-sm font-semibold leading-4">SpendWise Advisor</p>
-              <p className="text-xs text-blue-100">Answers from your recorded data</p>
+              <p className="text-xs text-blue-100">
+                {mode === "llm" ? "AI with backend-calculated finance tools" :
+                  mode === "offline" ? "Offline rules · AI provider not configured" :
+                    "Personal finance assistant"}
+              </p>
             </div>
             <button
               type="button"
@@ -131,7 +163,7 @@ export default function AdvisorChat({ open, onOpenChange, summary, now, firstNam
                   <button
                     key={s}
                     type="button"
-                    onClick={() => ask(s)}
+                    onClick={() => void ask(s)}
                     className="rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700 transition hover:bg-blue-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
                   >
                     {s}
@@ -144,6 +176,7 @@ export default function AdvisorChat({ open, onOpenChange, summary, now, firstNam
                 ref={inputRef}
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
+                maxLength={1000}
                 placeholder="Ask about your spending…"
                 aria-label="Message the advisor"
                 className="h-10 min-w-0 flex-1 rounded-xl border border-ink-200 px-3 text-sm outline-none transition placeholder:text-ink-400 focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
@@ -157,6 +190,9 @@ export default function AdvisorChat({ open, onOpenChange, summary, now, firstNam
                 <SendIcon className="h-4 w-4" />
               </button>
             </form>
+            <p className="mt-2 text-[10px] leading-4 text-ink-500">
+              With AI enabled, chat messages and requested summaries go to OpenAI; raw transaction notes and receipt files stay here.
+            </p>
           </div>
         </section>
       )}

@@ -1,4 +1,4 @@
-import type { CategoryId } from "./data";
+import { EXPENSE_CATEGORIES, type CategoryId } from "./data";
 
 export type ScanProgress = { progress: number; stage: string };
 export type ExtractedReceipt = {
@@ -6,6 +6,12 @@ export type ExtractedReceipt = {
   amount?: { value: number; confidence: number };
   date?: { value: string; confidence: number };
   category?: { value: CategoryId; confidence: number };
+};
+export type ReceiptScanResult = {
+  fields: ExtractedReceipt;
+  recognitionConfidence: number;
+  engine: "paddleocr-phobert" | "tesseract";
+  fallbackReason?: string;
 };
 
 const CATEGORY_KEYWORDS: Record<CategoryId, string[]> = {
@@ -307,7 +313,84 @@ async function canvasesForPdf(file: File, onPage: (page: number, total: number) 
   }
 }
 
-export async function scanReceipt(file: File, onProgress: (progress: ScanProgress) => void): Promise<{
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isConfidence(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1;
+}
+
+function isTextField(value: unknown): value is { value: string; confidence: number } {
+  return isRecord(value) && typeof value.value === "string" && isConfidence(value.confidence);
+}
+
+function isAmountField(value: unknown): value is { value: number; confidence: number } {
+  return isRecord(value) && typeof value.value === "number" && Number.isFinite(value.value) && value.value > 0 && isConfidence(value.confidence);
+}
+
+function isCategoryField(value: unknown): value is { value: CategoryId; confidence: number } {
+  return (
+    isRecord(value) &&
+    typeof value.value === "string" &&
+    EXPENSE_CATEGORIES.some((category) => category === value.value) &&
+    isConfidence(value.confidence)
+  );
+}
+
+function isReceiptFields(value: unknown): value is ExtractedReceipt {
+  if (!isRecord(value)) return false;
+  return (
+    (value.merchant === undefined || isTextField(value.merchant)) &&
+    (value.amount === undefined || isAmountField(value.amount)) &&
+    (value.date === undefined || isTextField(value.date)) &&
+    (value.category === undefined || isCategoryField(value.category))
+  );
+}
+
+class ReceiptAiUnavailableError extends Error {}
+
+async function scanWithReceiptAi(file: File): Promise<Pick<ReceiptScanResult, "fields" | "recognitionConfidence">> {
+  const form = new FormData();
+  form.append("file", file, file.name);
+
+  let response: Response;
+  try {
+    response = await fetch("/api/receipt-ai", {
+      method: "POST",
+      body: form,
+      cache: "no-store",
+      signal: AbortSignal.timeout(180_000),
+    });
+  } catch (error) {
+    throw new ReceiptAiUnavailableError(error instanceof Error ? error.message : "The AI service could not be reached.");
+  }
+
+  if (response.status >= 500) {
+    const payload = (await response.json().catch(() => null)) as unknown;
+    const message = isRecord(payload) && typeof payload.error === "string" ? payload.error : "The local receipt AI service is unavailable.";
+    throw new ReceiptAiUnavailableError(message);
+  }
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as unknown;
+    throw new Error(isRecord(payload) && typeof payload.error === "string" ? payload.error : "The receipt could not be scanned.");
+  }
+
+  const payload: unknown = await response.json();
+  if (
+    !isRecord(payload) ||
+    !isReceiptFields(payload.fields) ||
+    typeof payload.recognitionConfidence !== "number" ||
+    !Number.isFinite(payload.recognitionConfidence) ||
+    payload.recognitionConfidence < 0 ||
+    payload.recognitionConfidence > 100
+  ) {
+    throw new ReceiptAiUnavailableError("The local receipt AI service returned an invalid response.");
+  }
+  return { fields: payload.fields, recognitionConfidence: payload.recognitionConfidence };
+}
+
+async function scanWithTesseract(file: File, onProgress: (progress: ScanProgress) => void): Promise<{
   fields: ExtractedReceipt;
   recognitionConfidence: number;
 }> {
@@ -360,6 +443,7 @@ export async function scanReceipt(file: File, onProgress: (progress: ScanProgres
             header.height = 0;
           }
         }
+
       }
 
       canvases[index].width = 0;
@@ -376,5 +460,19 @@ export async function scanReceipt(file: File, onProgress: (progress: ScanProgres
       canvas.height = 0;
     });
     await worker.terminate();
+  }
+}
+
+export async function scanReceipt(file: File, onProgress: (progress: ScanProgress) => void): Promise<ReceiptScanResult> {
+  onProgress({ progress: 0.05, stage: "Scanning with local PaddleOCR and PhoBERT" });
+  try {
+    const result = await scanWithReceiptAi(file);
+    onProgress({ progress: 1, stage: "AI scan complete" });
+    return { ...result, engine: "paddleocr-phobert" };
+  } catch (error) {
+    if (!(error instanceof ReceiptAiUnavailableError)) throw error;
+    onProgress({ progress: 0.05, stage: "Local AI unavailable; switching to browser OCR" });
+    const result = await scanWithTesseract(file, onProgress);
+    return { ...result, engine: "tesseract", fallbackReason: error.message };
   }
 }

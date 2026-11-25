@@ -72,16 +72,9 @@ export const ACCOUNT_TYPE_LABEL: Record<AccountType, string> = {
 
 export const isDraft = (t: Pick<Transaction, "status">) => t.status !== "confirmed";
 
-/** Monthly limits. Combined = 4,500,000đ. `other` is intentionally unbudgeted. */
-export const BUDGETS: { category: CategoryId; limit: number }[] = [
-  { category: "housing", limit: 3_000_000 },
-  { category: "utilities", limit: 700_000 },
-  { category: "shopping", limit: 400_000 },
-  { category: "food", limit: 200_000 },
-  { category: "transport", limit: 200_000 },
-];
-
 export type Goal = { id: string; name: string; saved: number; target: number; due: string };
+
+export type BudgetLimit = { category: CategoryId; limit: number };
 
 export const GOALS: Goal[] = [
   { id: "emergency", name: "Emergency fund", saved: 3_000_000, target: 6_000_000, due: "2027-01-31" },

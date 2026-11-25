@@ -1,5 +1,5 @@
-import { GOALS } from "@/lib/data";
 import { formatDate, formatVnd, percent } from "@/lib/format";
+import { useTransactions } from "@/lib/store";
 import Card from "./Card";
 
 function Ring({ value }: { value: number }) {
@@ -28,7 +28,8 @@ function Ring({ value }: { value: number }) {
 }
 
 export default function SavingGoals({ className = "" }: { className?: string }) {
-  const earmarked = GOALS.reduce((acc, g) => acc + g.saved, 0);
+  const { goals } = useTransactions();
+  const earmarked = goals.reduce((acc, g) => acc + g.saved, 0);
   return (
     <Card
       title="Saving goals"
@@ -37,7 +38,7 @@ export default function SavingGoals({ className = "" }: { className?: string }) 
       className={className}
     >
       <ul className="flex h-full flex-col justify-around gap-3">
-        {GOALS.map((g) => (
+        {goals.length ? goals.map((g) => (
           <li key={g.id} className="flex items-center gap-3">
             <Ring value={percent(g.saved, g.target)} />
             <div className="min-w-0">
@@ -48,7 +49,9 @@ export default function SavingGoals({ className = "" }: { className?: string }) 
               <p className="text-xs text-ink-500">By {formatDate(g.due)}</p>
             </div>
           </li>
-        ))}
+        )) : (
+          <li className="text-sm text-ink-500">No saving goals yet.</li>
+        )}
       </ul>
     </Card>
   );

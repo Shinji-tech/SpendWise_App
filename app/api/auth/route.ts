@@ -1,28 +1,10 @@
-import { randomBytes, randomUUID, scrypt as scryptCallback, timingSafeEqual } from "node:crypto";
-import { promisify } from "node:util";
+import { randomUUID } from "node:crypto";
 import { createSession, clearSession, getSessionUser, validateSessionConfiguration } from "@/lib/server/session";
 import { getPool } from "@/lib/server/db";
-
-const scrypt = promisify(scryptCallback);
+import { hashPassword, verifyPassword } from "@/lib/server/password";
 
 function jsonError(error: string, status: number) {
   return Response.json({ error }, { status, headers: { "Cache-Control": "no-store" } });
-}
-
-async function hashPassword(password: string) {
-  const salt = randomBytes(16);
-  const hash = (await scrypt(password, salt, 64)) as Buffer;
-  return `scrypt$${salt.toString("hex")}$${hash.toString("hex")}`;
-}
-
-async function verifyPassword(password: string, stored: string) {
-  const [algorithm, saltHex, hashHex] = stored.split("$");
-  if (algorithm !== "scrypt" || !saltHex || !hashHex || !/^[a-f0-9]+$/i.test(saltHex + hashHex)) {
-    return false;
-  }
-  const expected = Buffer.from(hashHex, "hex");
-  const actual = (await scrypt(password, Buffer.from(saltHex, "hex"), expected.length)) as Buffer;
-  return actual.length === expected.length && timingSafeEqual(actual, expected);
 }
 
 export async function GET() {
@@ -76,12 +58,12 @@ export async function POST(request: Request) {
     }
 
     if (action === "login") {
-      const result = await pool.query<{ id: string; name: string; email: string; password_hash: string }>(
+      const result = await pool.query<{ id: string; name: string; email: string; password_hash: string | null }>(
         "SELECT id, name, email, password_hash FROM users WHERE email = $1",
         [email],
       );
       const user = result.rows[0];
-      if (!user || !(await verifyPassword(password, user.password_hash))) {
+      if (!user || !user.password_hash || !(await verifyPassword(password, user.password_hash))) {
         return jsonError("Incorrect email or password.", 401);
       }
       await createSession(user.id);

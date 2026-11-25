@@ -12,6 +12,7 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    "receipt_ai_service/.venv/**",
   ]),
 ]);
 

@@ -39,7 +39,7 @@ export default function DashboardPage() {
           label={overBudget ? "Over budget" : "Budget remaining"}
           value={formatVnd(s.budgetRemaining)}
           tone={overBudget ? "negative" : "default"}
-          note={`${formatVnd(s.totalLimit)} combined monthly limit`}
+          note={s.totalLimit ? `${formatVnd(s.totalLimit)} combined monthly limit` : "Set your own monthly limits"}
         />
       </div>
 

@@ -58,7 +58,47 @@ export async function loginUser(input: { email: string; password: string }): Pro
   return result.session;
 }
 
+export async function updateProfile(name: string): Promise<Session> {
+  const result = await request<{ session: Session }>("/api/settings/profile", {
+    method: "PATCH",
+    body: JSON.stringify({ name }),
+  });
+  return result.session;
+}
+
+export async function changePassword(currentPassword: string, newPassword: string): Promise<void> {
+  await request<{ ok: boolean }>("/api/settings/password", {
+    method: "PATCH",
+    body: JSON.stringify({ currentPassword, newPassword }),
+  });
+}
+
+export async function requestEmailChange(email: string, currentPassword: string): Promise<string> {
+  const result = await request<{ message: string }>("/api/settings/email", {
+    method: "POST",
+    body: JSON.stringify({ email, currentPassword }),
+  });
+  return result.message;
+}
+
+export async function confirmEmailChange(token: string): Promise<string> {
+  const result = await request<{ message: string }>("/api/settings/email", {
+    method: "PATCH",
+    body: JSON.stringify({ token }),
+  });
+  return result.message;
+}
+
 export async function requestPasswordReset(email: string): Promise<void> {
-  if (!email.trim()) throw new AuthError("Please enter your email.");
-  throw new AuthError("Password reset isn't configured yet. Contact the administrator for help.");
+  await request<{ ok: boolean }>("/api/auth/password-reset", {
+    method: "POST",
+    body: JSON.stringify({ email }),
+  });
+}
+
+export async function resetPassword(token: string, newPassword: string): Promise<void> {
+  await request<{ ok: boolean }>("/api/auth/password-reset", {
+    method: "PATCH",
+    body: JSON.stringify({ token, newPassword }),
+  });
 }

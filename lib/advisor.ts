@@ -1,12 +1,8 @@
-import { CATEGORY_LABEL, GOALS, type CategoryId } from "./data";
+import { CATEGORY_LABEL, GOALS, type CategoryId, type Goal } from "./data";
 import { formatDate, formatVnd, percent } from "./format";
 import type { Summary } from "./finance";
 
-/**
- * Rule-based stand-in for the AI advisor. It answers from the user's own
- * recorded numbers, so it works offline. To use a real model, replace the body
- * of `answerQuestion` with a call to your API and keep the signature.
- */
+/** Offline fallback used when the configured LLM provider is unavailable. */
 
 export const SUGGESTIONS = [
   "How am I doing this month?",
@@ -26,7 +22,7 @@ const CATEGORY_KEYWORDS: Record<Exclude<CategoryId, "other">, string[]> = {
 /** Matches a word that *starts with* a keyword, so "eat" doesn't fire on "create". */
 const has = (q: string, words: string[]) => words.some((w) => new RegExp(`\\b${w.trim()}`).test(q));
 
-export function answerQuestion(question: string, s: Summary, now: Date): string {
+export function answerQuestion(question: string, s: Summary, now: Date, goals: Goal[] = GOALS): string {
   const q = question.toLowerCase();
 
   // A specific category: spend, share and budget status.
@@ -48,7 +44,8 @@ export function answerQuestion(question: string, s: Summary, now: Date): string 
   }
 
   if (has(q, ["goal", "saving", "save", "laptop", "emergency", "on track"])) {
-    return GOALS.map((g) => {
+    if (!goals.length) return "You don't have any saving goals yet.";
+    return goals.map((g) => {
       const due = new Date(g.due);
       const monthsLeft = Math.max(1, Math.round((due.getTime() - now.getTime()) / (1000 * 60 * 60 * 24 * 30.4)));
       const remaining = Math.max(0, g.target - g.saved);

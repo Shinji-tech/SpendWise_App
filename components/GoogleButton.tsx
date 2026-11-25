@@ -1,36 +1,41 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import Alert from "./Alert";
-import  Button  from "./Button";
+import Button from "./Button";
 import { GoogleIcon } from "./icons";
 
-/**
- * "Continue with Google". There's no OAuth provider wired up yet, so clicking it
- * shows a short notice. Replace the onClick body with your sign-in call
- * (e.g. NextAuth's `signIn("google")`).
- */
+const GOOGLE_ERRORS: Record<string, string> = {
+  account_exists: "This email already has an account. Sign in with your password, then connect Google in Settings.",
+  already_linked: "That Google account is already connected to another SpendWise account.",
+  cancelled: "Google sign-in was cancelled.",
+  invalid_state: "The Google sign-in request expired. Please try again.",
+  not_configured: "Google sign-in is not configured yet. Contact the administrator.",
+  provider_error: "Google sign-in could not be completed. Please try again.",
+  sign_in_required: "Sign in first, then connect Google from Settings.",
+  unavailable: "Authentication is temporarily unavailable. Please try again.",
+};
+
 export default function GoogleButton() {
-  const [notice, setNotice] = useState(false);
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
-  useEffect(() => () => {
-    if (timer.current) clearTimeout(timer.current);
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    const error = url.searchParams.get("google_error");
+    if (!error) return;
+    const frame = requestAnimationFrame(() => setNotice(GOOGLE_ERRORS[error] ?? GOOGLE_ERRORS.provider_error));
+    url.searchParams.delete("google_error");
+    window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+    return () => cancelAnimationFrame(frame);
   }, []);
-
-  function handleClick() {
-    setNotice(true);
-    if (timer.current) clearTimeout(timer.current);
-    timer.current = setTimeout(() => setNotice(false), 4000);
-  }
 
   return (
     <div className="space-y-3">
-      <Button variant="secondary" onClick={handleClick}>
+      <Button variant="secondary" onClick={() => window.location.assign(new URL("/api/auth/google", window.location.origin).toString())}>
         <GoogleIcon />
         Continue with Google
       </Button>
-      {notice && <Alert tone="info">Google sign-in isn&apos;t connected yet. Hook it up to your OAuth provider.</Alert>}
+      {notice && <Alert tone="error">{notice}</Alert>}
     </div>
   );
 }

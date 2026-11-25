@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { ACCOUNT_TYPE_LABEL, type AccountType, type FinancialAccount } from "@/lib/data";
 import { balanceForAccount } from "@/lib/finance";
 import { formatVnd } from "@/lib/format";
@@ -10,7 +10,7 @@ const inputClass =
   "h-11 w-full rounded-xl border border-ink-200 bg-white px-3.5 text-sm text-ink-900 outline-none transition hover:border-ink-400 focus:border-accent-500 focus:ring-4 focus:ring-accent-100";
 
 export default function AccountsManager() {
-  const { accounts, transactions, addAccount, updateAccount } = useTransactions();
+  const { userId, accounts, transactions, addAccount, updateAccount } = useTransactions();
   const [editing, setEditing] = useState<FinancialAccount | null>(null);
   const [name, setName] = useState("");
   const [type, setType] = useState<AccountType>("cash");
@@ -20,13 +20,18 @@ export default function AccountsManager() {
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
-  const resetForm = () => {
+  const resetForm = useCallback(() => {
     setEditing(null);
     setName("");
     setType("cash");
     setOpeningDigits("0");
     setError(null);
-  };
+  }, []);
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(resetForm);
+    return () => window.cancelAnimationFrame(frame);
+  }, [resetForm, userId]);
 
   const editAccount = (account: FinancialAccount) => {
     setEditing(account);

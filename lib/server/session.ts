@@ -5,7 +5,7 @@ import { getPool } from "./db";
 const COOKIE_NAME = "spendwise_session";
 const SESSION_SECONDS = 60 * 60 * 24 * 7;
 
-function getSecret() {
+export function getAuthSecret() {
   const secret = process.env.AUTH_SECRET;
   if (!secret || secret.length < 32) {
     throw new Error("AUTH_SECRET must be configured with at least 32 characters.");
@@ -14,16 +14,22 @@ function getSecret() {
 }
 
 export function validateSessionConfiguration() {
-  getSecret();
+  getAuthSecret();
 }
 
 function sign(value: string) {
-  return createHmac("sha256", getSecret()).update(value).digest("base64url");
+  return createHmac("sha256", getAuthSecret()).update(value).digest("base64url");
 }
 
 export async function createSession(userId: string) {
+  const result = await getPool().query<{ session_version: number }>(
+    "SELECT session_version FROM users WHERE id = $1",
+    [userId],
+  );
+  const sessionVersion = result.rows[0]?.session_version;
+  if (sessionVersion === undefined) throw new Error("Cannot create a session for a missing account.");
   const expiresAt = Math.floor(Date.now() / 1000) + SESSION_SECONDS;
-  const payload = `${userId}.${expiresAt}`;
+  const payload = `${userId}.${sessionVersion}.${expiresAt}`;
   const token = `${payload}.${sign(payload)}`;
 
   (await cookies()).set(COOKIE_NAME, token, {
@@ -44,21 +50,41 @@ export async function getSessionUser(): Promise<{ id: string; name: string; emai
   if (!token) return null;
 
   const parts = token.split(".");
-  if (parts.length !== 3) return null;
+  let userId: string;
+  let sessionVersion: number;
+  let expiresAtText: string;
+  let signature: string;
+  let payload: string;
+  if (parts.length === 3) {
+    [userId, expiresAtText, signature] = parts;
+    sessionVersion = 0;
+    payload = `${userId}.${expiresAtText}`;
+  } else if (parts.length === 4) {
+    const versionText = parts[1];
+    userId = parts[0];
+    expiresAtText = parts[2];
+    signature = parts[3];
+    if (!/^\d+$/.test(versionText)) return null;
+    sessionVersion = Number(versionText);
+    if (!Number.isSafeInteger(sessionVersion) || sessionVersion < 0) return null;
+    payload = `${userId}.${versionText}.${expiresAtText}`;
+  } else {
+    return null;
+  }
 
-  const [userId, expiresAtText, signature] = parts;
   if (!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(userId) || !/^\d+$/.test(expiresAtText)) return null;
   const expiresAt = Number(expiresAtText);
   if (!Number.isSafeInteger(expiresAt) || expiresAt <= Math.floor(Date.now() / 1000)) return null;
 
-  const payload = `${userId}.${expiresAtText}`;
   const expected = Buffer.from(sign(payload));
   const actual = Buffer.from(signature);
   if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) return null;
 
-  const result = await getPool().query<{ id: string; name: string; email: string }>(
-    "SELECT id, name, email FROM users WHERE id = $1",
+  const result = await getPool().query<{ id: string; name: string; email: string; session_version: number }>(
+    "SELECT id, name, email, session_version FROM users WHERE id = $1",
     [userId],
   );
-  return result.rows[0] ?? null;
+  const user = result.rows[0];
+  if (!user || user.session_version !== sessionVersion) return null;
+  return { id: user.id, name: user.name, email: user.email };
 }

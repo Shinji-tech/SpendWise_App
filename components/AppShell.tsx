@@ -18,6 +18,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const {
     transactions,
     accounts,
+    budgets,
     ready,
     now,
     error: transactionsError,
@@ -73,8 +74,9 @@ export default function AppShell({ children }: { children: ReactNode }) {
     if (toastTimer.current) clearTimeout(toastTimer.current);
     toastTimer.current = setTimeout(() => setToast(null), 3500);
   }, []);
+  const updateSession = useCallback((nextSession: Session) => setSession(nextSession), []);
 
-  const summary = useMemo(() => summarize(transactions, now, accounts), [transactions, now, accounts]);
+  const summary = useMemo(() => summarize(transactions, now, accounts, budgets), [transactions, now, accounts, budgets]);
   const firstName = session?.name.trim().split(/\s+/)[0] || "there";
   const openAdd = useCallback(() => {
     setInitialReceiptFile(null);
@@ -83,8 +85,8 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const openScanReceipt = useCallback(() => scanInputRef.current?.click(), []);
   const openEdit = useCallback((id: string) => setDrawer({ kind: "edit", id }), []);
   const shell = useMemo(
-    () => ({ summary, firstName, openAdd, openEdit, openScanReceipt, showToast }),
-    [summary, firstName, openAdd, openEdit, openScanReceipt, showToast],
+    () => ({ summary, firstName, session, updateSession, openAdd, openEdit, openScanReceipt, showToast }),
+    [summary, firstName, session, updateSession, openAdd, openEdit, openScanReceipt, showToast],
   );
 
   function onScanFile(event: ChangeEvent<HTMLInputElement>) {
@@ -145,7 +147,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
             <MenuIcon className="h-5 w-5" />
           </button>
           <div className="flex flex-1 justify-end sm:justify-start">
-            <SearchBox />
+            <SearchBox onOpenTransaction={openEdit} />
           </div>
           <button
             type="button"
@@ -183,7 +185,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
         onChange={onScanFile}
       />
 
-      <AdvisorChat open={advisorOpen} onOpenChange={setAdvisorOpen} summary={summary} now={now} firstName={firstName} />
+      <AdvisorChat open={advisorOpen} onOpenChange={setAdvisorOpen} firstName={firstName} />
 
       {drawer && (
         <TransactionDrawer
@@ -258,6 +260,8 @@ export default function AppShell({ children }: { children: ReactNode }) {
 type ShellValue = {
   summary: Summary;
   firstName: string;
+  session: Session | null;
+  updateSession: (session: Session) => void;
   /** Open the add-transaction drawer. */
   openAdd: () => void;
   /** Open the platform file picker or mobile camera for a receipt photo. */

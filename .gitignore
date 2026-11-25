@@ -2,6 +2,9 @@
 
 # dependencies
 /node_modules
+receipt_ai_service/.venv/
+__pycache__/
+*.py[cod]
 /.pnp
 .pnp.*
 .yarn/*

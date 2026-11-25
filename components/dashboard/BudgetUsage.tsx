@@ -16,6 +16,9 @@ export default function BudgetUsage({ summary }: { summary: Summary }) {
       action={{ label: "View all budgets", href: "/budgets" }}
     >
       <ul className="space-y-3.5">
+        {!ordered.length && (
+          <li className="text-sm text-ink-500">Set your own monthly limits to see budget usage here.</li>
+        )}
         {ordered.map((b) => {
           const over = b.over > 0;
           return (
